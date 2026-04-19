@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env.local
+83513_documents.json
+83513_downloads.json
+83513_supabase_sync.json
+M83513_*.pdf
+MIL-DTL-83513_*.pdf
