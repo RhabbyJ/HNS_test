@@ -8,10 +8,43 @@ This repository is a small Python automation workspace for syncing `MIL-DTL-8351
 - `assist_83513_common.py`: shared HTTP/download parsing helpers
 - `reorganize_supabase_paths.py`: one-time bucket path migration to `base/01/02/...`
 - `download_83513_family.py`: local download utility for debugging
+- `m83513_extraction_engine.py`: phase-1 pdf-first extractor for structured JSON
+- `m83513_extraction_registry.py`: slash-sheet type registry and required-field rules
+- `m83513_load_03.py`: document-specific loader for `MIL-DTL-83513/03`
+- `m83513_data_schema.sql`: normalized extraction tables for `m83513_*`
+- `m83513_extraction_schema.json`: intermediate JSON contract for extraction output
 - `supabase_schema.sql`: database schema for `pdf_objects`
 - `.env.local`: local secrets and runtime configuration
 
 Generated JSON reports such as `83513_documents.json` and `83513_supabase_sync.json` are runtime artifacts, not source files.
+
+## Current Progress
+Current validated state:
+
+- `pdf_objects` and private Storage bucket `mil-spec-pdfs` are populated in Supabase for the current `MIL-DTL-83513` family.
+- Actual ASSIST family count is `34` documents: base spec plus slash sheets `/1` through `/33`. The apparent `35th` row on Quick Search is a search-criteria row, not a document.
+- Storage and query ordering are normalized around `base`, `01`, `02`, ..., `33`, and `pdf_objects.sort_order` is available for ordered queries.
+- Phase-1 `/03` extraction is working with deterministic parsing and no LLM fallback.
+- `/03` extraction currently produces:
+  - 8 configuration rows
+  - 58 wire-option rows
+  - 11 text chunks
+  - confidence `0.97`
+- `/03` loader has already been applied successfully to Supabase:
+  - 48 base configuration rows
+  - 2784 wire-option rows
+  - 11 text-chunk rows
+  - 1 extraction-run row
+
+## Session Handoff
+Known status at pause:
+
+- `/03` is the only slash sheet with a full extraction-to-load path implemented.
+- `is_space_approved` in wire options is still heuristic and should be treated as inferred, not authoritative.
+- Figure references are good enough for PDF deep links, but not yet curated for polished UI labels.
+- Vision LLM is intentionally not part of the default path. Use pdf-first parsing and only add LLM fallback for low-confidence pages or diagram-heavy cases.
+
+Next recommended step: implement `/04` extraction and loader using the `/03` pattern, then verify mate-finder compatibility across `/03` and `/04`.
 
 ## Build, Test, and Development Commands
 - `python -m pip install -r requirements.txt`: install Python dependencies
@@ -19,7 +52,10 @@ Generated JSON reports such as `83513_documents.json` and `83513_supabase_sync.j
 - `python sync_83513_to_supabase.py --limit 3`: safe smoke test against ASSIST and Supabase
 - `python sync_83513_to_supabase.py`: full sync run
 - `python reorganize_supabase_paths.py --dry-run`: preview storage path moves before applying them
-- `python -m py_compile assist_83513_common.py discover_83513.py sync_83513_to_supabase.py`: quick syntax validation
+- `python m83513_extraction_engine.py --storage-path mil-dtl-83513/03/MIL-DTL-83513_03_rev_K.pdf --document-key 3 --spec-sheet MIL-DTL-83513/3K --title "Connectors, Electrical, Rectangular, Plug, Microminiature, Polarized Shell, Pin Contacts, Class M, Crimp Type" --source-url https://quicksearch.dla.mil/qsDocDetails.aspx?ident_number=33937 --output-json m83513_03_extraction_output.json`: real `/03` extraction run
+- `python m83513_load_03.py --input-json m83513_03_extraction_output.json`: dry-run `/03` loader preview
+- `python m83513_load_03.py --input-json m83513_03_extraction_output.json --apply`: write `/03` normalized rows to Supabase
+- `python -m py_compile assist_83513_common.py discover_83513.py m83513_extraction_engine.py m83513_load_03.py sync_83513_to_supabase.py`: quick syntax validation
 
 ## Coding Style & Naming Conventions
 Use 4-space indentation and standard Python style. Prefer explicit, descriptive names such as `document_key`, `storage_path`, and `revision_letter`. Keep shared ASSIST parsing logic in `assist_83513_common.py` rather than duplicating regex or HTTP flow in multiple scripts. New filenames should follow the existing lowercase, underscore-separated pattern.
@@ -37,7 +73,7 @@ There is no formal test suite yet. Before changing code, define success criteria
 Do not commit real secrets. `.env.local` is ignored and should hold `SUPABASE_URL`, `SUPABASE_SECRET_KEY` or `SUPABASE_SERVICE_ROLE_KEY`, and bucket/table settings. Use private Storage buckets unless public access is explicitly required.
 
 ## Commit & Pull Request Guidelines
-This folder is not currently a Git repository, so no commit history is available to infer conventions. Use short, imperative commit subjects such as `Add ordered Supabase path migration`. PRs should describe the workflow impact, config/schema changes, and any live verification performed.
+This repo now has Git initialized but only a minimal history, so conventions should stay simple. Use short, imperative commit subjects such as `Add /03 extraction loader`. PRs should describe the workflow impact, config/schema changes, Supabase migrations, and any live verification performed.
 
 ## Verification
 A task is not complete until the relevant checks for the changed area pass. In the final response, summarize what changed, how it was verified, and any assumptions or open questions.

@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/m83513_extraction_schema.json",
+  "title": "M83513ExtractionResult",
+  "type": "object",
+  "required": [
+    "source",
+    "connector_type",
+    "field_presence",
+    "confidence_score",
+    "llm_fallback_required",
+    "extraction_method"
+  ],
+  "properties": {
+    "source": {
+      "type": "object",
+      "required": [
+        "spec_sheet",
+        "document_key",
+        "document_type",
+        "title",
+        "source_url",
+        "storage_path"
+      ],
+      "properties": {
+        "spec_sheet": { "type": "string" },
+        "document_key": { "type": "string" },
+        "document_type": { "type": "string" },
+        "title": { "type": "string" },
+        "source_url": { "type": "string" },
+        "storage_path": { "type": "string" },
+        "revision": { "type": ["string", "null"] }
+      }
+    },
+    "connector_type": { "type": "string" },
+    "cavity_counts": {
+      "type": "array",
+      "items": { "type": "integer" }
+    },
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "number" },
+          { "type": "string" }
+        ]
+      }
+    },
+    "mates_with": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "example_parts": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "finish_codes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "wire_specs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "pin_components": {
+      "type": "object",
+      "properties": {
+        "prefix": { "type": "string" },
+        "format_example": { "type": ["string", "null"] },
+        "components": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "insert_arrangements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["insert_arrangement", "cavity_count"],
+            "properties": {
+              "insert_arrangement": { "type": "string" },
+              "cavity_count": { "type": "integer" }
+            }
+          }
+        },
+        "shell_finish_options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["code", "description"],
+            "properties": {
+              "code": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "configuration_rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["page_number", "cavity_count", "shell_size_letter", "dimensions"],
+        "properties": {
+          "page_number": { "type": "integer" },
+          "cavity_count": { "type": "integer" },
+          "shell_size_letter": { "type": "string" },
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": {
+              "oneOf": [
+                { "type": "number" },
+                { "type": "string" }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "wire_options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["wire_type_code", "wire_specification", "wire_length_inches", "note_refs", "note_texts", "is_space_approved"],
+        "properties": {
+          "wire_type_code": { "type": "string" },
+          "wire_specification": { "type": "string" },
+          "wire_length_inches": { "type": "number" },
+          "note_refs": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "note_texts": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "is_space_approved": { "type": "boolean" }
+        }
+      }
+    },
+    "figure_references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["figure_number", "label", "page_number"],
+        "properties": {
+          "figure_number": { "type": "integer" },
+          "label": { "type": "string" },
+          "title": { "type": ["string", "null"] },
+          "page_number": { "type": "integer" }
+        }
+      }
+    },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "field_presence": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "confidence_score": { "type": "number" },
+    "llm_fallback_required": { "type": "boolean" },
+    "llm_fallback_reason": { "type": ["string", "null"] },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "code", "message"],
+        "properties": {
+          "severity": { "type": "string" },
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "page_number": { "type": ["integer", "null"] }
+        }
+      }
+    },
+    "chunks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["chunk_id", "page_number", "text"],
+        "properties": {
+          "chunk_id": { "type": "string" },
+          "page_number": { "type": "integer" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "page_summaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["page_number", "text_length"],
+        "properties": {
+          "page_number": { "type": "integer" },
+          "text_length": { "type": "integer" },
+          "detected_headers": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "dimension_hits": {
+            "type": "object",
+            "additionalProperties": { "type": "number" }
+          },
+          "cavity_counts": {
+            "type": "array",
+            "items": { "type": "integer" }
+          },
+          "example_parts": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "mates_with": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "wire_specs": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "figure_references": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["figure_number", "label", "page_number"],
+              "properties": {
+                "figure_number": { "type": "integer" },
+                "label": { "type": "string" },
+                "title": { "type": ["string", "null"] },
+                "page_number": { "type": "integer" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "extraction_method": { "type": "string" },
+    "accepted_without_llm": { "type": "boolean" }
+  }
+}

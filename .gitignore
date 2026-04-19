@@ -4,5 +4,6 @@ __pycache__/
 83513_documents.json
 83513_downloads.json
 83513_supabase_sync.json
+m83513_*_extraction_output.json
 M83513_*.pdf
 MIL-DTL-83513_*.pdf

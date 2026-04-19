@@ -6,6 +6,12 @@ Primary workflow:
 python sync_83513_to_supabase.py
 ```
 
+Phase-1 extraction workflow:
+
+```powershell
+python m83513_extraction_engine.py --storage-path mil-dtl-83513/base/MIL-DTL-83513_base_rev_H.pdf --document-key base --spec-sheet MIL-DTL-83513H --title "Connectors, Electrical, Rectangular, Microminiature, Polarized Shell, General Specification for" --source-url https://quicksearch.dla.mil/qsDocDetails.aspx?ident_number=33934
+```
+
 To reorganize existing Storage objects into ordered `base/01/02/...` paths:
 
 ```powershell
@@ -40,4 +46,5 @@ Useful commands:
 ```powershell
 python sync_83513_to_supabase.py --limit 3
 python download_83513_family.py --limit 3
+python -m py_compile assist_83513_common.py discover_83513.py m83513_extraction_engine.py sync_83513_to_supabase.py
 ```
