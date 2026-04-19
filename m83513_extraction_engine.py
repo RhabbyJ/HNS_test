@@ -20,7 +20,7 @@ from m83513_extraction_registry import (
 from sync_83513_to_supabase import create_supabase_client, get_server_key, load_env_file, require_env
 
 
-PART_NUMBER_PATTERN = re.compile(r"M83513/\d{1,2}(?:\s*-\s*[A-Z0-9]+)+")
+PART_NUMBER_PATTERN = re.compile(r"M83513/\d{1,2}\s*-\s*[A-Z]\s*\d{2}(?:\s*\d+/)?\s*[A-Z]", re.IGNORECASE)
 REVISION_PATTERN = re.compile(
     r"MIL-DTL-83513(?:/\d{1,2})?(?P<revision>[A-Z])(?:\(\d+\))?(?:\s+NOT\s+\d+)?$",
     re.IGNORECASE,
@@ -28,11 +28,17 @@ REVISION_PATTERN = re.compile(
 MATE_PATTERN = re.compile(r"MIL-DTL-83513/\d{1,2}", re.IGNORECASE)
 WIRE_PATTERN = re.compile(r"M22759/\d{1,2}-\d{1,2}-\d{1,2}", re.IGNORECASE)
 PAGE_HEADER_PATTERN = re.compile(r"^\s*(.+?)\s*$", re.MULTILINE)
-PIN_HEADER_PATTERN = re.compile(r"M83513/(?P<slash>\d{1,2})\s*-\s*(?P<insert>[A-Z])\s*(?P<wire>\d{2})\s*(?P<finish>[A-Z])")
+PIN_HEADER_PATTERN = re.compile(
+    r"M83513/(?P<slash>\d{1,2})\s*-\s*(?P<insert>[A-Z])\s*(?P<wire>\d{2})(?:\s*\d+/)?\s*(?P<finish>[A-Z])",
+    re.IGNORECASE,
+)
 FIGURE_PATTERN = re.compile(r"FIGURE\s+(?P<figure_no>\d+)\.?\s*(?P<title>[^.\n]+)?", re.IGNORECASE)
 INSERT_MAP_PATTERN = re.compile(r"(?P<insert>[A-H])\s*=\s*(?P<cavity>9|15|21|25|31|37|51|100)\b")
 FINISH_MAP_PATTERN = re.compile(r"(?P<code>[ACKNPT])\s*=\s*(?P<description>[A-Za-z][A-Za-z ,()/-]+)")
-WIRE_ROW_START_PATTERN = re.compile(r"(?P<code>\d{2})\s*=\s*")
+WIRE_ROW_PATTERN = re.compile(
+    r"(?P<code>\d{2})\s*=\s*(?P<body>.*?)(?=(?:\s\d{2}\s*=)|(?:\s1/\s+These connectors)|$)",
+    re.IGNORECASE | re.DOTALL,
+)
 WIRE_NOTE_SPLIT_PATTERN = re.compile(r"(?=(?:^|\s)(\d)/\s)")
 CURRENT_RATING_PATTERN = re.compile(r"Current rating, maximum:\s*(?P<amps>\d+(?:\.\d+)?)\s*amperes per contact", re.IGNORECASE)
 CANONICAL_FINISH_DESCRIPTIONS = {
@@ -177,6 +183,7 @@ def normalize_headers(text: str) -> list[str]:
 def normalize_example_part(text: str) -> str:
     normalized = re.sub(r"\s+", "", text.upper())
     normalized = normalized.replace("–", "-")
+    normalized = re.sub(r"(?<=-[A-Z]\d{2})\d+/", "", normalized)
     return normalized
 
 
@@ -308,6 +315,18 @@ def infer_dimensions(configuration_rows: list[dict[str, Any]]) -> dict[str, floa
 
 def parse_pin_components(pages: list[str], document_key: str) -> dict[str, Any]:
     text = "\n".join(pages)
+    if document_key == "base":
+        return {
+            "prefix": "M83513",
+            "format_example": None,
+            "components": [],
+            "insert_arrangements": [],
+            "shell_finish_options": [
+                {"code": code, "description": description}
+                for code, description in CANONICAL_FINISH_DESCRIPTIONS.items()
+            ],
+        }
+
     header_match = PIN_HEADER_PATTERN.search(text)
     insert_map = [
         {"insert_arrangement": match.group("insert"), "cavity_count": int(match.group("cavity"))}
@@ -341,8 +360,10 @@ def parse_pin_components(pages: list[str], document_key: str) -> dict[str, Any]:
 
 
 def parse_wire_note_map(pages: list[str]) -> dict[str, str]:
-    text = " ".join(pages[8:])
-    note_text = text[text.find("1/ ") :] if "1/ " in text else text
+    text = " ".join(pages[6:])
+    marker_match = re.search(r"1/\s+These connectors", text, re.IGNORECASE)
+    start = marker_match.start() if marker_match else text.rfind("1/ ")
+    note_text = text[start:] if start >= 0 else text
     notes: dict[str, str] = {}
     positions = list(WIRE_NOTE_SPLIT_PATTERN.finditer(note_text))
     for index, match in enumerate(positions):
@@ -360,16 +381,18 @@ def parse_wire_options(pages: list[str]) -> list[dict[str, Any]]:
     text = " ".join(pages[6:8])
     wire_note_map = parse_wire_note_map(pages)
     options: list[dict[str, Any]] = []
-    row_starts = list(WIRE_ROW_START_PATTERN.finditer(text))
-    for index, match in enumerate(row_starts):
+    for match in WIRE_ROW_PATTERN.finditer(text):
         code = match.group("code")
-        start = match.end()
-        end = row_starts[index + 1].start() if index + 1 < len(row_starts) else len(text)
-        segment = " ".join(text[start:end].split())
+        segment = " ".join(match.group("body").split())
         if "See notes at end of wire type" in segment:
             segment = segment.split("See notes at end of wire type", 1)[0].strip()
+        if "These connectors have leads attached" in segment:
+            segment = segment.split("These connectors have leads attached", 1)[0].strip()
 
-        length_match = re.search(r"\s(?P<length>0\.5|1\.0|\d{2})\s(?P<notes>(?:\d+/[, ]*)+)", segment)
+        length_match = re.search(
+            r"\s(?P<length>0\.5|1\.0|\d{2})(?:\s+inch(?:es)?\s+long)?\s+(?P<notes>(?:\d+/[\s,]*)+)$",
+            segment,
+        )
         if not length_match:
             continue
 
@@ -392,7 +415,10 @@ def infer_attributes(source: ExtractionSource, pages: list[str], configuration_r
     title_upper = source.title.upper()
     joined = "\n".join(pages)
     current_rating_match = CURRENT_RATING_PATTERN.search(joined)
-    insert_map = {row["shell_size_letter"]: row["cavity_count"] for row in configuration_rows}
+    insert_map = {
+        match.group("insert"): int(match.group("cavity"))
+        for match in INSERT_MAP_PATTERN.finditer(joined)
+    }
     shell_material = "Metal" if "CLASS M" in title_upper else "Plastic" if "CLASS P" in title_upper else None
     gender = "Plug" if "PLUG" in title_upper else "Receptacle" if "RECEPTACLE" in title_upper else None
     contact_type = "Pin" if "PIN CONTACTS" in title_upper else "Socket" if "SOCKET CONTACTS" in title_upper else None
@@ -471,7 +497,7 @@ def extract_phase_one(args: argparse.Namespace) -> ExtractionResult:
     )
 
     page_summaries = [build_page_summary(page_number, text) for page_number, text in enumerate(pages, start=1)]
-    configuration_rows = parse_configuration_rows(pages)
+    configuration_rows = parse_configuration_rows(pages) if document_spec.document_type == "plug_receptacle" else []
     pin_components = parse_pin_components(pages, args.document_key)
     example_parts = sorted({value for page in page_summaries for value in page.example_parts})
     if pin_components.get("format_example"):
@@ -496,7 +522,7 @@ def extract_phase_one(args: argparse.Namespace) -> ExtractionResult:
         wire_specs=sorted({value for page in page_summaries for value in page.wire_specs}),
         configuration_rows=configuration_rows,
         pin_components=pin_components,
-        wire_options=parse_wire_options(pages),
+        wire_options=parse_wire_options(pages) if document_spec.document_type == "plug_receptacle" else [],
         figure_references=aggregate_figure_references(page_summaries),
         attributes=infer_attributes(source, pages, configuration_rows),
         page_summaries=page_summaries,
