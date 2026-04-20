@@ -4,6 +4,11 @@ type SearchFormProps = {
   initialCavityCount?: string;
 };
 
+const slashSheetOptions = [
+  "base",
+  ...Array.from({ length: 33 }, (_, index) => `${index + 1}`.padStart(2, "0")),
+];
+
 export function SearchForm({
   initialQuery = "",
   initialSlashSheet = "",
@@ -35,11 +40,11 @@ export function SearchForm({
           defaultValue={initialSlashSheet}
         >
           <option value="">All</option>
-          <option value="01">01</option>
-          <option value="02">02</option>
-          <option value="03">03</option>
-          <option value="04">04</option>
-          <option value="05">05</option>
+          {slashSheetOptions.map((slashSheet) => (
+            <option key={slashSheet} value={slashSheet}>
+              {slashSheet === "base" ? "Base" : slashSheet}
+            </option>
+          ))}
         </select>
       </div>
 

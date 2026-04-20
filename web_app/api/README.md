@@ -12,9 +12,16 @@ Planned first endpoints:
 Current implemented query surface:
 
 - `GET /search?q=&slash_sheet=&cavity_count=&shell_size_letter=&shell_finish_code=&gender=&connector_type=&limit=&offset=`
+- `GET /search?...&grouped=false`
 - `GET /parts/{part_id}`
 - `GET /parts/{part_id}/mates`
 - `GET /parts/{part_id}/mates?grouped=false`
+
+Search endpoint behavior:
+
+- default grouped mode returns deduped product cards
+- `grouped=false` returns raw normalized variants for debugging and validation
+- grouped search collapses finish-code variants within the same slash-sheet/configuration family
 
 Mate endpoint behavior:
 

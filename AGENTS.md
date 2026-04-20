@@ -91,6 +91,7 @@ Current validated state:
 - The mate endpoint now has two modes:
   - grouped product mode by default
   - raw variant mode for internal/debug validation only
+- The search endpoint now also defaults to grouped product results, so finish-code variants collapse into a single result card while raw search remains available for internal/debug use.
 - The golden mate suite now exists in `compatibility_rules_engine`:
   - `10` golden cases
   - `0` false positives
@@ -101,6 +102,11 @@ Current validated state:
   - part detail page
   - grouped mate results
 - The frontend build has been verified successfully with `npm run build`.
+- The frontend search/detail UX has been hardened for first-user testing:
+  - search results tolerate both grouped and legacy raw response shapes
+  - slash-sheet filter now supports `base` and `01` through `33`
+  - trailing/leading spaces in search input are trimmed
+  - part detail now separates compatible connector mates from mounting hardware references such as `MIL-DTL-83513/5`
 - Supabase browsing should prefer the filtered views:
   - `v_83513_documents`
   - `v_83513_01_configurations`

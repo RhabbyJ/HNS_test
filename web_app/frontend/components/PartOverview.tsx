@@ -5,6 +5,10 @@ type PartOverviewProps = {
 };
 
 export function PartOverview({ part }: PartOverviewProps) {
+  const connectorMateRefs = part.mates_with.filter(
+    (reference) => reference !== part.mounting_hardware_ref,
+  );
+
   return (
     <div className="detail-card">
       <div className="eyebrow">{part.spec_sheet}</div>
@@ -25,7 +29,12 @@ export function PartOverview({ part }: PartOverviewProps) {
             <li>Gender: {part.gender ?? "Unknown"}</li>
             <li>Contact type: {part.contact_type ?? "Unknown"}</li>
             <li>Shell finish: {part.shell_finish_description ?? part.shell_finish_code ?? "Unknown"}</li>
-            <li>Mates with: {part.mates_with.join(", ") || "None listed"}</li>
+            <li>
+              Compatible connector mates: {connectorMateRefs.join(", ") || "None listed"}
+            </li>
+            {part.mounting_hardware_ref ? (
+              <li>Mounting hardware: {part.mounting_hardware_ref}</li>
+            ) : null}
           </ul>
         </div>
 

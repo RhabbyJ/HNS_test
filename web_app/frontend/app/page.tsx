@@ -7,7 +7,8 @@ type HomePageProps = {
 };
 
 function readFirst(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+  const raw = Array.isArray(value) ? value[0] ?? "" : value ?? "";
+  return raw.trim();
 }
 
 export default async function HomePage({ searchParams }: HomePageProps) {

@@ -21,8 +21,22 @@ export type SearchResult = {
   citation: SourceCitation;
 };
 
+export type GroupedSearchResult = {
+  search_family_key: string;
+  slash_sheet: string;
+  connector_type?: string | null;
+  cavity_count?: number | null;
+  shell_size_letter?: string | null;
+  variant_count: number;
+  available_finish_codes: string[];
+  representative_variant: SearchResult;
+  citation: SourceCitation;
+};
+
 export type SearchResponse = {
-  items: SearchResult[];
+  grouped: boolean;
+  items: GroupedSearchResult[];
+  raw_variants: SearchResult[];
   total: number;
 };
 
@@ -50,6 +64,7 @@ export type PartDetail = {
   shell_finish_description?: string | null;
   dimensions?: Record<string, unknown> | null;
   mates_with: string[];
+  mounting_hardware_ref?: string | null;
   example_full_pin?: string | null;
   wire_options: WireOption[];
   citation: SourceCitation;

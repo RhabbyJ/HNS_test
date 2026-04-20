@@ -36,6 +36,18 @@ class SearchResult(BaseModel):
     citation: SourceCitation
 
 
+class GroupedSearchResult(BaseModel):
+    search_family_key: str
+    slash_sheet: str
+    connector_type: str | None = None
+    cavity_count: int | None = None
+    shell_size_letter: str | None = None
+    variant_count: int
+    available_finish_codes: list[str] = Field(default_factory=list)
+    representative_variant: SearchResult
+    citation: SourceCitation
+
+
 class PartDetail(BaseModel):
     id: str
     spec_family: str
@@ -52,6 +64,7 @@ class PartDetail(BaseModel):
     shell_finish_description: str | None = None
     dimensions: dict | None = None
     mates_with: list[str] = Field(default_factory=list)
+    mounting_hardware_ref: str | None = None
     example_full_pin: str | None = None
     wire_options: list[WireOption] = Field(default_factory=list)
     citation: SourceCitation
@@ -84,7 +97,9 @@ class GroupedMateResult(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    items: list[SearchResult]
+    grouped: bool
+    items: list[GroupedSearchResult] = Field(default_factory=list)
+    raw_variants: list[SearchResult] = Field(default_factory=list)
     total: int
 
 

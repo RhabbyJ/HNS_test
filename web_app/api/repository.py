@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from pdf_storage.sync_83513_to_supabase import get_server_key, load_env_file, require_env
 from web_app.api.models import (
+    GroupedSearchResult,
     GroupedMateResult,
     MateCandidate,
     PartDetail,
@@ -22,7 +23,7 @@ DEFAULT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env.local"
 
 
 class ProductRepository(Protocol):
-    def search_parts(
+    def search_parts_raw(
         self,
         query: str | None = None,
         slash_sheet: str | None = None,
@@ -34,6 +35,20 @@ class ProductRepository(Protocol):
         limit: int = 25,
         offset: int = 0,
     ) -> tuple[list[SearchResult], int]:
+        ...
+
+    def search_parts_grouped(
+        self,
+        query: str | None = None,
+        slash_sheet: str | None = None,
+        cavity_count: int | None = None,
+        shell_size_letter: str | None = None,
+        shell_finish_code: str | None = None,
+        gender: str | None = None,
+        connector_type: str | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[GroupedSearchResult], int]:
         ...
 
     def get_part(self, part_id: str) -> PartDetail | None:
@@ -69,6 +84,18 @@ def parse_mate_slash_sheets(values: list[str] | None) -> list[str]:
         except ValueError:
             continue
     return [item for item in slash_sheets if item]
+
+
+def search_group_key(row: SearchResult) -> str:
+    return ":".join(
+        [
+            row.slash_sheet,
+            row.connector_type or "",
+            str(row.cavity_count or ""),
+            row.shell_size_letter or "",
+            row.name,
+        ]
+    )
 
 
 def rank_variant_key(source_part: PartDetail, candidate: dict[str, Any]) -> tuple[int, int, int, int, str, str]:
@@ -206,7 +233,7 @@ class SupabaseRestRepository:
             citation=citation,
         )
 
-    def search_parts(
+    def _search_filters(
         self,
         query: str | None = None,
         slash_sheet: str | None = None,
@@ -215,9 +242,7 @@ class SupabaseRestRepository:
         shell_finish_code: str | None = None,
         gender: str | None = None,
         connector_type: str | None = None,
-        limit: int = 25,
-        offset: int = 0,
-    ) -> tuple[list[SearchResult], int]:
+    ) -> list[tuple[str, str]]:
         filters: list[tuple[str, str]] = [
             ("select", ",".join([
                 "id",
@@ -237,9 +262,7 @@ class SupabaseRestRepository:
                 "figure_references",
             ])),
             ("spec_family", "eq.83513"),
-            ("order", "slash_sheet.asc,cavity_count.asc,shell_finish_code.asc"),
-            ("limit", str(limit)),
-            ("offset", str(offset)),
+            ("order", "slash_sheet.asc,cavity_count.asc,shell_finish_code.asc,example_full_pin.asc"),
         ]
 
         normalized_slash_sheet = normalize_slash_sheet(slash_sheet)
@@ -263,6 +286,30 @@ class SupabaseRestRepository:
                     f"(name.ilike.*{escaped}*,description.ilike.*{escaped}*,example_full_pin.ilike.*{escaped}*,spec_sheet.ilike.*{escaped}*)",
                 )
             )
+        return filters
+
+    def search_parts_raw(
+        self,
+        query: str | None = None,
+        slash_sheet: str | None = None,
+        cavity_count: int | None = None,
+        shell_size_letter: str | None = None,
+        shell_finish_code: str | None = None,
+        gender: str | None = None,
+        connector_type: str | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[SearchResult], int]:
+        filters = self._search_filters(
+            query=query,
+            slash_sheet=slash_sheet,
+            cavity_count=cavity_count,
+            shell_size_letter=shell_size_letter,
+            shell_finish_code=shell_finish_code,
+            gender=gender,
+            connector_type=connector_type,
+        )
+        filters.extend([("limit", str(limit)), ("offset", str(offset))])
 
         rows, total = self._request(
             "base_configurations",
@@ -270,6 +317,71 @@ class SupabaseRestRepository:
             headers={"Prefer": "count=exact"},
         )
         return [self._search_result_from_row(row) for row in rows], total or len(rows)
+
+    def search_parts_grouped(
+        self,
+        query: str | None = None,
+        slash_sheet: str | None = None,
+        cavity_count: int | None = None,
+        shell_size_letter: str | None = None,
+        shell_finish_code: str | None = None,
+        gender: str | None = None,
+        connector_type: str | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> tuple[list[GroupedSearchResult], int]:
+        raw_variants, _ = self.search_parts_raw(
+            query=query,
+            slash_sheet=slash_sheet,
+            cavity_count=cavity_count,
+            shell_size_letter=shell_size_letter,
+            shell_finish_code=shell_finish_code,
+            gender=gender,
+            connector_type=connector_type,
+            limit=500,
+            offset=0,
+        )
+
+        grouped_map: dict[str, list[SearchResult]] = {}
+        for variant in raw_variants:
+            key = search_group_key(variant)
+            grouped_map.setdefault(key, [])
+            grouped_map[key].append(variant)
+
+        grouped_items: list[GroupedSearchResult] = []
+        for key, variants in grouped_map.items():
+            representative = variants[0]
+            finish_codes = sorted(
+                {
+                    variant.shell_finish_code
+                    for variant in variants
+                    if variant.shell_finish_code
+                }
+            )
+            grouped_items.append(
+                GroupedSearchResult(
+                    search_family_key=key,
+                    slash_sheet=representative.slash_sheet,
+                    connector_type=representative.connector_type,
+                    cavity_count=representative.cavity_count,
+                    shell_size_letter=representative.shell_size_letter,
+                    variant_count=len(variants),
+                    available_finish_codes=finish_codes,
+                    representative_variant=representative,
+                    citation=representative.citation,
+                )
+            )
+
+        grouped_items.sort(
+            key=lambda item: (
+                item.slash_sheet,
+                item.cavity_count or 0,
+                item.shell_size_letter or "",
+                item.representative_variant.name,
+            )
+        )
+        sliced = grouped_items[offset: offset + limit]
+        return sliced, len(grouped_items)
 
     def _wire_options_for_part(self, part_id: str) -> list[WireOption]:
         rows, _ = self._request(
@@ -311,6 +423,7 @@ class SupabaseRestRepository:
                     "shell_finish_description",
                     "dimensions",
                     "mates_with",
+                    "mounting_hardware_ref",
                     "example_full_pin",
                     "source_document",
                     "source_url",
@@ -342,6 +455,7 @@ class SupabaseRestRepository:
             shell_finish_description=row.get("shell_finish_description"),
             dimensions=row.get("dimensions"),
             mates_with=row.get("mates_with") or [],
+            mounting_hardware_ref=row.get("mounting_hardware_ref"),
             example_full_pin=row.get("example_full_pin"),
             wire_options=self._wire_options_for_part(part_id),
             citation=self._citation_from_row(row),

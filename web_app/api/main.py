@@ -34,11 +34,25 @@ def search(
     shell_finish_code: str | None = Query(default=None, min_length=1, max_length=1),
     gender: str | None = Query(default=None, description="PLUG or RECEPTACLE."),
     connector_type: str | None = Query(default=None, description="Exact connector type filter."),
+    grouped: bool = Query(default=True, description="Return grouped product results. Set false for raw variants."),
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     repository: ProductRepository = Depends(get_repository),
 ) -> SearchResponse:
-    items, total = repository.search_parts(
+    if grouped:
+        items, total = repository.search_parts_grouped(
+            query=q,
+            slash_sheet=slash_sheet,
+            cavity_count=cavity_count,
+            shell_size_letter=shell_size_letter,
+            shell_finish_code=shell_finish_code,
+            gender=gender,
+            connector_type=connector_type,
+            limit=limit,
+            offset=offset,
+        )
+        return SearchResponse(grouped=True, items=items, total=total)
+    raw_variants, total = repository.search_parts_raw(
         query=q,
         slash_sheet=slash_sheet,
         cavity_count=cavity_count,
@@ -49,7 +63,7 @@ def search(
         limit=limit,
         offset=offset,
     )
-    return SearchResponse(items=items, total=total)
+    return SearchResponse(grouped=False, raw_variants=raw_variants, total=total)
 
 
 @app.get("/parts/{part_id}", response_model=PartDetail)
