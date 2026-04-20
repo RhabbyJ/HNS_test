@@ -1,0 +1,172 @@
+[
+  {
+    "case_id": "m83513_01_9_c",
+    "selector": {
+      "example_full_pin": "M83513/01-AC",
+      "slash_sheet": "01"
+    },
+    "expected_valid_slash_sheets": ["02", "04"],
+    "expected_invalid_slash_sheets": ["01", "03", "05"],
+    "why": "Plug pin solder should mate to receptacle socket variants, not to other plug variants or mounting hardware.",
+    "source_evidence": [
+      {
+        "spec_sheet": "MIL-DTL-83513/1J",
+        "page": 6,
+        "note": "Audit confirmed mating references to slash sheets /2 and /4; /5 is mounting hardware, not a connector mate."
+      }
+    ]
+  },
+  {
+    "case_id": "m83513_01_51_c",
+    "selector": {
+      "example_full_pin": "M83513/01-GC",
+      "slash_sheet": "01"
+    },
+    "expected_valid_slash_sheets": ["02", "04"],
+    "expected_invalid_slash_sheets": ["01", "03", "05"],
+    "why": "The 51-contact plug pin solder configuration should preserve the same mating family as the 9-contact variant.",
+    "source_evidence": [
+      {
+        "spec_sheet": "MIL-DTL-83513/1J",
+        "page": 6,
+        "note": "Mating slash-sheet references are document-level for /01, so they apply across cavity counts."
+      }
+    ]
+  },
+  {
+    "case_id": "m83513_02_9_c",
+    "selector": {
+      "example_full_pin": "M83513/02-AC",
+      "slash_sheet": "02"
+    },
+    "expected_valid_slash_sheets": ["01", "03"],
+    "expected_invalid_slash_sheets": ["02", "04", "05"],
+    "why": "Receptacle socket solder should mate to plug pin solder/crimp variants, not to receptacles or mounting hardware.",
+    "source_evidence": [
+      {
+        "spec_sheet": "MIL-DTL-83513/2H",
+        "page": 6,
+        "note": "Audit confirmed mating references to slash sheets /1 and /3; /5 is mounting hardware only."
+      }
+    ]
+  },
+  {
+    "case_id": "m83513_02_51_c",
+    "selector": {
+      "example_full_pin": "M83513/02-GC",
+      "slash_sheet": "02"
+    },
+    "expected_valid_slash_sheets": ["01", "03"],
+    "expected_invalid_slash_sheets": ["02", "04", "05"],
+    "why": "The 51-contact receptacle socket solder configuration should match the same plug families as other /02 variants.",
+    "source_evidence": [
+      {
+        "spec_sheet": "MIL-DTL-83513/2H",
+        "page": 6,
+        "note": "Mating slash-sheet references are document-level for /02."
+      }
+    ]
+  },
+  {
+    "case_id": "m83513_02_100_hc",
+    "selector": {
+      "example_full_pin": "M83513/02-HC",
+      "slash_sheet": "02"
+    },
+    "expected_valid_slash_sheets": ["01", "03"],
+    "expected_invalid_slash_sheets": ["02", "04", "05"],
+    "why": "The 100-contact H insert arrangement remains a receptacle socket solder mate for /01 and /03 only.",
+    "source_evidence": [
+      {
+        "spec_sheet": "MIL-DTL-83513/2H",
+        "page": 6,
+        "note": "Audit confirmed /02 mates with /1 and /3; 100-contact insert variants remain within the same mating family."
+      }
+    ]
+  },
+  {
+    "case_id": "m83513_03_9_c",
+    "selector": {
+      "example_full_pin": "M83513/03-A01C",
+      "slash_sheet": "03"
+    },
+    "expected_valid_slash_sheets": ["02", "04"],
+    "expected_invalid_slash_sheets": ["01", "03", "05"],
+    "why": "Plug pin crimp should mate to receptacle socket solder/crimp, not to other plugs or mounting hardware.",
+    "source_evidence": [
+      {
+        "spec_sheet": "MIL-DTL-83513/3K",
+        "page": 6,
+        "note": "Audit confirmed mating references to slash sheets /2 and /4; /5 is a hardware reference only."
+      }
+    ]
+  },
+  {
+    "case_id": "m83513_03_51_n",
+    "selector": {
+      "example_full_pin": "M83513/03-G01N",
+      "slash_sheet": "03"
+    },
+    "expected_valid_slash_sheets": ["02", "04"],
+    "expected_invalid_slash_sheets": ["01", "03", "05"],
+    "why": "The 51-contact class M crimp plug should preserve the same valid mate sheets as the 9-contact variant.",
+    "source_evidence": [
+      {
+        "spec_sheet": "MIL-DTL-83513/3K",
+        "page": 6,
+        "note": "Mating slash-sheet references are document-level for /03."
+      }
+    ]
+  },
+  {
+    "case_id": "m83513_03_100_hc",
+    "selector": {
+      "example_full_pin": "M83513/03-H01C",
+      "slash_sheet": "03"
+    },
+    "expected_valid_slash_sheets": ["02", "04"],
+    "expected_invalid_slash_sheets": ["01", "03", "05"],
+    "why": "The 100-contact class M crimp plug should still only return the receptacle mate families.",
+    "source_evidence": [
+      {
+        "spec_sheet": "MIL-DTL-83513/3K",
+        "page": 6,
+        "note": "Audit confirmed /03 mates with /2 and /4 only; /5 is not a connector mate."
+      }
+    ]
+  },
+  {
+    "case_id": "m83513_04_9_c",
+    "selector": {
+      "example_full_pin": "M83513/04-A01C",
+      "slash_sheet": "04"
+    },
+    "expected_valid_slash_sheets": ["01", "03"],
+    "expected_invalid_slash_sheets": ["02", "04", "05"],
+    "why": "Receptacle socket crimp should mate to plug pin solder/crimp, not to receptacles or hardware.",
+    "source_evidence": [
+      {
+        "spec_sheet": "MIL-DTL-83513/4K",
+        "page": 6,
+        "note": "Audit confirmed mating references to slash sheets /1 and /3; /5 is mounting hardware only."
+      }
+    ]
+  },
+  {
+    "case_id": "m83513_04_51_c",
+    "selector": {
+      "example_full_pin": "M83513/04-G01C",
+      "slash_sheet": "04"
+    },
+    "expected_valid_slash_sheets": ["01", "03"],
+    "expected_invalid_slash_sheets": ["02", "04", "05"],
+    "why": "The 51-contact class M receptacle socket crimp configuration should preserve the same plug mate family.",
+    "source_evidence": [
+      {
+        "spec_sheet": "MIL-DTL-83513/4K",
+        "page": 6,
+        "note": "Mating slash-sheet references are document-level for /04."
+      }
+    ]
+  }
+]

@@ -35,7 +35,7 @@ create table if not exists public.base_configurations (
   example_full_pin text,
   figure_references jsonb,
   extra_data jsonb,
-  unique (spec_sheet, cavity_count, shell_size_letter, shell_finish_code)
+  unique (spec_sheet, cavity_count, shell_size_letter, shell_finish_code, insert_arrangement_ref)
 );
 
 create table if not exists public.hns_wire_options (
@@ -68,6 +68,7 @@ create table if not exists public.extraction_runs (
   spec_family text not null default '83513',
   spec_sheet text not null,
   slash_sheet text not null,
+  sort_order integer not null default 0,
   revision text not null,
   extraction_method text not null default 'pdf_first',
   confidence_score numeric(4,2) not null,
@@ -89,7 +90,7 @@ create index if not exists idx_text_chunks_lookup
   on public.text_chunks (spec_family, slash_sheet, page_number);
 
 create index if not exists idx_extraction_runs_lookup
-  on public.extraction_runs (spec_family, slash_sheet, created_at desc);
+  on public.extraction_runs (spec_family, sort_order, created_at desc);
 
 create or replace view public.v_83513_documents as
 select
@@ -128,6 +129,16 @@ select *
 from public.v_83513_configurations
 where slash_sheet = '03';
 
+create or replace view public.v_83513_01_configurations as
+select *
+from public.v_83513_configurations
+where slash_sheet = '01';
+
+create or replace view public.v_83513_02_configurations as
+select *
+from public.v_83513_configurations
+where slash_sheet = '02';
+
 create or replace view public.v_83513_04_configurations as
 select *
 from public.v_83513_configurations
@@ -137,6 +148,22 @@ create or replace view public.v_83513_base_configurations as
 select *
 from public.v_83513_configurations
 where slash_sheet = 'base';
+
+create or replace view public.v_83513_extraction_runs as
+select
+  spec_family,
+  slash_sheet,
+  sort_order,
+  spec_sheet,
+  revision,
+  extraction_method,
+  confidence_score,
+  llm_fallback_required,
+  issues,
+  created_at
+from public.extraction_runs
+where spec_family = '83513'
+order by sort_order, created_at desc;
 
 create or replace view public.v_83513_03_wire_options as
 select

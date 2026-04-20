@@ -161,6 +161,10 @@
     "confidence_score": { "type": "number" },
     "llm_fallback_required": { "type": "boolean" },
     "llm_fallback_reason": { "type": ["string", "null"] },
+    "fallback_flags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "issues": {
       "type": "array",
       "items": {
@@ -171,6 +175,22 @@
           "code": { "type": "string" },
           "message": { "type": "string" },
           "page_number": { "type": ["integer", "null"] }
+        }
+      }
+    },
+    "validation_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["status", "code", "message"],
+        "properties": {
+          "status": { "type": "string" },
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "details": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          }
         }
       }
     },
