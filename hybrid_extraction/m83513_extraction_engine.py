@@ -60,6 +60,74 @@ WIRE_ROW_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 WIRE_NOTE_SPLIT_PATTERN = re.compile(r"(?=(?:^|\s)(\d{1,2})/\s)")
+TORQUE_RANGE_PATTERN = re.compile(
+    r"(?P<minimum>\d+(?:\.\d+)?)\s*(?:to|-)\s*(?P<maximum>\d+(?:\.\d+)?)\s*(?:inch[- ]pound\s*s?|in[- ]lbs?|in[- ]lbf)",
+    re.IGNORECASE,
+)
+TORQUE_VALUE_FOR_THREAD_PATTERN = re.compile(
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?:inch\s*pound\s*s?|in[- ]lbs?|in[- ]lbf)\s+for\s+(?P<thread>#[0-9]+-[0-9]+)(?:\s*\((?P<scope>[^)]+)\))?",
+    re.IGNORECASE,
+)
+TORQUE_REFERENCE_PATTERN = re.compile(
+    r"(?:mating|mounting)\s+hardware\s+torque\s*:\s*(?P<text>.*?in accordance with\s+(?P<reference>MIL-DTL-83513/5))",
+    re.IGNORECASE,
+)
+M83513_05_TORQUE_TABLE_ROWS = [
+    (
+        "mounting_torque",
+        "#2-56",
+        "2(.086)-56",
+        "Metal shell",
+        3.0,
+        4.0,
+        "Table I mounting torque; 2(.086)-56 metal shell: 3.0-4.0 in-lbs.",
+    ),
+    (
+        "mounting_torque",
+        "#2-56",
+        "2(.086)-56",
+        "Plastic shell",
+        2.25,
+        2.75,
+        "Table I mounting torque; 2(.086)-56 plastic shell: 2.25-2.75 in-lbs.",
+    ),
+    (
+        "mounting_torque",
+        "#4-40",
+        "4(.112)-40",
+        "Metal shell",
+        5.0,
+        6.0,
+        "Table I mounting torque; 4(.112)-40 metal shell: 5.0-6.0 in-lbs.",
+    ),
+    (
+        "mating_torque",
+        "#2-56",
+        "2(.086)-56",
+        "Metal shell",
+        1.0,
+        2.5,
+        "Table II mating torque; 2(.086)-56 metal shell: 1.0-2.5 in-lbs.",
+    ),
+    (
+        "mating_torque",
+        "#2-56",
+        "2(.086)-56",
+        "Plastic shell",
+        1.0,
+        1.75,
+        "Table II mating torque; 2(.086)-56 plastic shell: 1.0-1.75 in-lbs.",
+    ),
+    (
+        "mating_torque",
+        "#4-40",
+        "4(.112)-40",
+        "Metal shell",
+        4.0,
+        4.5,
+        "Table II mating torque; 4(.112)-40 metal shell: 4.0-4.5 in-lbs.",
+    ),
+]
 CURRENT_RATING_PATTERN = re.compile(r"Current rating, maximum:\s*(?P<amps>\d+(?:\.\d+)?)\s*amperes per contact", re.IGNORECASE)
 CANONICAL_FINISH_DESCRIPTIONS = {
     "A": "Pure electrodeposited aluminum",
@@ -123,6 +191,19 @@ class ChunkRecord:
     text: str
 
 
+@dataclass(frozen=True)
+class TorqueValue:
+    context: str
+    source_page: int
+    torque_text: str
+    torque_min_in_lbf: float | None = None
+    torque_max_in_lbf: float | None = None
+    fastener_thread: str | None = None
+    source_thread_label: str | None = None
+    arrangement_scope: str | None = None
+    applies_to: str | None = None
+
+
 @dataclass
 class ExtractionResult:
     source: ExtractionSource
@@ -136,6 +217,7 @@ class ExtractionResult:
     pin_components: dict[str, Any] = field(default_factory=dict)
     configuration_rows: list[dict[str, Any]] = field(default_factory=list)
     wire_options: list[dict[str, Any]] = field(default_factory=list)
+    torque_values: list[TorqueValue] = field(default_factory=list)
     figure_references: list[dict[str, Any]] = field(default_factory=list)
     attributes: dict[str, Any] = field(default_factory=dict)
     page_summaries: list[PageExtraction] = field(default_factory=list)
@@ -297,6 +379,142 @@ def build_chunks(pages: list[str]) -> list[ChunkRecord]:
             chunk_id = f"page-{page_number}-chunk-{offset // chunk_size + 1}"
             chunks.append(ChunkRecord(chunk_id=chunk_id, page_number=page_number, text=chunk_text))
     return chunks
+
+
+def torque_context(text: str) -> str:
+    lower_text = text.lower()
+    if "mating connector hardware" in lower_text:
+        return "mating_connector_hardware"
+    if "mounting hardware" in lower_text:
+        return "mounting_hardware"
+    if "mating hardware" in lower_text:
+        return "mating_hardware"
+    return "hardware"
+
+
+def torque_source_excerpt(text: str, match_start: int, match_end: int) -> str:
+    sentence_start = -1
+    for index in range(match_start - 1, -1, -1):
+        if text[index] != ".":
+            continue
+        previous_char = text[index - 1] if index else ""
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if previous_char.isdigit() and next_char.isdigit():
+            continue
+        sentence_start = index
+        break
+    if sentence_start == -1:
+        sentence_start = max(0, match_start - 160)
+    else:
+        sentence_start += 1
+    sentence_end = min(len(text), match_end + 180)
+    for index in range(match_end, min(len(text), match_end + 360)):
+        if text[index] != ".":
+            continue
+        previous_char = text[index - 1] if index else ""
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if previous_char.isdigit() and next_char.isdigit():
+            continue
+        sentence_end = index + 1
+        break
+    return " ".join(text[sentence_start:sentence_end].split())[:420]
+
+
+def page_contains_m83513_05_torque_tables(page_number: int, text: str) -> bool:
+    if page_number != 7:
+        return False
+    lower_text = text.lower()
+    return (
+        "mil-dtl-83513/5" in lower_text
+        and "mounting hardware" in lower_text
+        and "torque as required" in lower_text
+    )
+
+
+def parse_torque_values(pages: list[str]) -> list[TorqueValue]:
+    values: list[TorqueValue] = []
+    seen: set[tuple[Any, ...]] = set()
+
+    def add(value: TorqueValue) -> None:
+        key = (
+            value.context,
+            value.source_page,
+            value.torque_text,
+            value.torque_min_in_lbf,
+            value.torque_max_in_lbf,
+            value.fastener_thread,
+            value.arrangement_scope,
+            value.applies_to,
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        values.append(value)
+
+    for page_number, raw_text in enumerate(pages, start=1):
+        text = " ".join(raw_text.replace("\u2013", "-").replace("\u2014", "-").split())
+        text = re.sub(r"\bpound\s+s\b", "pounds", text, flags=re.IGNORECASE)
+        if "torque" not in text.lower() and "inch pound" not in text.lower() and "inch-pound" not in text.lower():
+            continue
+
+        for match in TORQUE_RANGE_PATTERN.finditer(text):
+            excerpt = torque_source_excerpt(text, match.start(), match.end())
+            if "torque" not in excerpt.lower():
+                continue
+            add(
+                TorqueValue(
+                    context=torque_context(excerpt),
+                    source_page=page_number,
+                    torque_text=excerpt,
+                    torque_min_in_lbf=float(match.group("minimum")),
+                    torque_max_in_lbf=float(match.group("maximum")),
+                    applies_to="hardware",
+                )
+            )
+
+        for match in TORQUE_VALUE_FOR_THREAD_PATTERN.finditer(text):
+            excerpt = torque_source_excerpt(text, match.start(), match.end())
+            add(
+                TorqueValue(
+                    context=torque_context(excerpt),
+                    source_page=page_number,
+                    torque_text=excerpt,
+                    torque_min_in_lbf=float(match.group("value")),
+                    torque_max_in_lbf=float(match.group("value")),
+                    fastener_thread=match.group("thread"),
+                    arrangement_scope=" ".join((match.group("scope") or "").split()) or None,
+                    applies_to="hardware",
+                )
+            )
+
+        for match in TORQUE_REFERENCE_PATTERN.finditer(text):
+            excerpt = torque_source_excerpt(text, match.start(), match.end())
+            add(
+                TorqueValue(
+                    context=torque_context(excerpt),
+                    source_page=page_number,
+                    torque_text=excerpt,
+                    applies_to=match.group("reference").upper(),
+                )
+            )
+
+        if page_contains_m83513_05_torque_tables(page_number, text):
+            for context, thread, source_thread_label, shell_scope, minimum, maximum, source_text in M83513_05_TORQUE_TABLE_ROWS:
+                add(
+                    TorqueValue(
+                        context=context,
+                        source_page=page_number,
+                        torque_text=source_text,
+                        torque_min_in_lbf=minimum,
+                        torque_max_in_lbf=maximum,
+                        fastener_thread=thread,
+                        source_thread_label=source_thread_label,
+                        arrangement_scope=shell_scope,
+                        applies_to="MIL-DTL-83513/5",
+                    )
+                )
+
+    return values
 
 
 def current_mate_reference(document_key: str) -> str:
@@ -918,6 +1136,7 @@ def extract_phase_one(args: argparse.Namespace) -> ExtractionResult:
         configuration_rows=configuration_rows,
         pin_components=pin_components,
         wire_options=parse_wire_options(pages) if document_spec.document_type == "plug_receptacle" else [],
+        torque_values=parse_torque_values(pages),
         figure_references=aggregate_figure_references(page_summaries),
         attributes=infer_attributes(source, pages, configuration_rows),
         page_summaries=page_summaries,

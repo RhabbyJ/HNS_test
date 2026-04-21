@@ -1,24 +1,21 @@
 type SearchFormProps = {
   initialQuery?: string;
-  initialSlashSheet?: string;
   initialCavityCount?: string;
+  initialGender?: string;
+  initialContactType?: string;
 };
-
-const slashSheetOptions = [
-  "base",
-  ...Array.from({ length: 33 }, (_, index) => `${index + 1}`.padStart(2, "0")),
-];
 
 export function SearchForm({
   initialQuery = "",
-  initialSlashSheet = "",
   initialCavityCount = "",
+  initialGender = "",
+  initialContactType = "",
 }: SearchFormProps) {
   return (
     <form className="panel panel-pad stack" action="/" method="get">
       <div>
         <label className="label" htmlFor="q">
-          Search
+          PN
         </label>
         <input
           className="field"
@@ -27,25 +24,6 @@ export function SearchForm({
           defaultValue={initialQuery}
           placeholder="M83513/03-A01C or 51-pin plug"
         />
-      </div>
-
-      <div>
-        <label className="label" htmlFor="slash_sheet">
-          Slash Sheet
-        </label>
-        <select
-          className="select"
-          id="slash_sheet"
-          name="slash_sheet"
-          defaultValue={initialSlashSheet}
-        >
-          <option value="">All</option>
-          {slashSheetOptions.map((slashSheet) => (
-            <option key={slashSheet} value={slashSheet}>
-              {slashSheet === "base" ? "Base" : slashSheet}
-            </option>
-          ))}
-        </select>
       </div>
 
       <div>
@@ -59,6 +37,38 @@ export function SearchForm({
           defaultValue={initialCavityCount}
           placeholder="9, 15, 21, 51, 100"
         />
+      </div>
+
+      <div>
+        <label className="label" htmlFor="gender">
+          Plug/Receptacle
+        </label>
+        <select
+          className="select"
+          id="gender"
+          name="gender"
+          defaultValue={initialGender}
+        >
+          <option value="">All</option>
+          <option value="PLUG">Plug</option>
+          <option value="RECEPTACLE">Receptacle</option>
+        </select>
+      </div>
+
+      <div>
+        <label className="label" htmlFor="contact_type">
+          Pin/Socket
+        </label>
+        <select
+          className="select"
+          id="contact_type"
+          name="contact_type"
+          defaultValue={initialContactType}
+        >
+          <option value="">All</option>
+          <option value="PIN">Pin</option>
+          <option value="SOCKET">Socket</option>
+        </select>
       </div>
 
       <button className="button" type="submit">

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -394,6 +395,51 @@ def wire_rows_for_base(extraction: dict[str, Any], base_config_id: str) -> list[
     return rows
 
 
+def torque_key_for_row(row: dict[str, Any]) -> str:
+    key_parts = [
+        row["spec_family"],
+        row["spec_sheet"],
+        row["slash_sheet"],
+        row["context"],
+        row.get("applies_to") or "",
+        row.get("fastener_thread") or "",
+        row.get("arrangement_scope") or "",
+        str(row.get("torque_min_in_lbf") or ""),
+        str(row.get("torque_max_in_lbf") or ""),
+        str(row["source_page"]),
+        row["torque_text"],
+    ]
+    digest = hashlib.sha1("|".join(key_parts).encode("utf-8")).hexdigest()[:20]
+    return f"83513-torque-{digest}"
+
+
+def torque_rows(extraction: dict[str, Any]) -> list[dict[str, Any]]:
+    source = extraction["source"]
+    rows: list[dict[str, Any]] = []
+    for value in extraction.get("torque_values", []):
+        row = {
+            "spec_family": "83513",
+            "spec_sheet": source["spec_sheet"],
+            "slash_sheet": slash_sheet_value(extraction),
+            "revision": source["revision"],
+            "context": value["context"],
+            "applies_to": value.get("applies_to"),
+            "fastener_thread": value.get("fastener_thread"),
+            "source_thread_label": value.get("source_thread_label"),
+            "arrangement_scope": value.get("arrangement_scope"),
+            "torque_min_in_lbf": value.get("torque_min_in_lbf"),
+            "torque_max_in_lbf": value.get("torque_max_in_lbf"),
+            "torque_text": value["torque_text"],
+            "source_document": source["spec_sheet"],
+            "source_page": value["source_page"],
+            "source_url": source["source_url"],
+            "storage_path": source["storage_path"],
+        }
+        row["torque_key"] = torque_key_for_row(row)
+        rows.append(row)
+    return rows
+
+
 def chunk_rows(extraction: dict[str, Any]) -> list[dict[str, Any]]:
     source = extraction["source"]
     rows: list[dict[str, Any]] = []
@@ -441,10 +487,12 @@ def apply_rows(extraction: dict[str, Any], env_file: Path) -> None:
     source = extraction["source"]
     slash_sheet = slash_sheet_value(extraction)
     base_rows = base_rows_for_extraction(extraction)
+    torque_payload = torque_rows(extraction)
     chunk_payload = chunk_rows(extraction)
     run_payload = extraction_run_row(extraction)
 
     supabase.table("base_configurations").delete().eq("spec_sheet", source["spec_sheet"]).eq("slash_sheet", slash_sheet).execute()
+    supabase.table("torque_values").delete().eq("spec_sheet", source["spec_sheet"]).eq("slash_sheet", slash_sheet).execute()
 
     inserted_rows: list[dict[str, Any]] = []
     for base_row in base_rows:
@@ -461,6 +509,11 @@ def apply_rows(extraction: dict[str, Any], env_file: Path) -> None:
             chunk_payload,
             on_conflict="spec_family,spec_sheet,page_number,chunk_index",
         ).execute()
+    if torque_payload:
+        supabase.table("torque_values").upsert(
+            torque_payload,
+            on_conflict="torque_key",
+        ).execute()
     supabase.table("extraction_runs").insert(run_payload).execute()
 
 
@@ -470,9 +523,11 @@ def main() -> int:
         extraction = load_json(args.input_json)
         base_rows = base_rows_for_extraction(extraction)
         wire_count = len(extraction.get("wire_options", []))
+        torque_count = len(extraction.get("torque_values", []))
         print(f"Document type: {extraction['source']['document_type']}")
         print(f"Base configuration rows: {len(base_rows)}")
         print(f"Wire options per base row: {wire_count}")
+        print(f"Torque value rows: {torque_count}")
         print(f"Chunk rows: {len(extraction.get('chunks', []))}")
 
         if not args.apply:

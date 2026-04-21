@@ -14,6 +14,8 @@ export type SearchResult = {
   name: string;
   description?: string | null;
   connector_type?: string | null;
+  gender?: string | null;
+  contact_type?: string | null;
   cavity_count?: number | null;
   shell_size_letter?: string | null;
   shell_finish_code?: string | null;
@@ -48,6 +50,11 @@ export type WireOption = {
   is_space_approved: boolean;
 };
 
+export type HardwareOption = {
+  code: string;
+  description: string;
+};
+
 export type PartDetail = {
   id: string;
   spec_family: string;
@@ -63,8 +70,12 @@ export type PartDetail = {
   shell_finish_code?: string | null;
   shell_finish_description?: string | null;
   dimensions?: Record<string, unknown> | null;
+  shell_material?: string | null;
   mates_with: string[];
   mounting_hardware_ref?: string | null;
+  hardware_options: HardwareOption[];
+  wire_range?: string | null;
+  torque_values: string[];
   example_full_pin?: string | null;
   wire_options: WireOption[];
   citation: SourceCitation;
@@ -81,6 +92,10 @@ export type MateCandidate = {
   source_page?: number | null;
   confidence_type: "deterministic";
   shell_finish_code?: string | null;
+  example_full_pin?: string | null;
+  gender?: string | null;
+  contact_type?: string | null;
+  hardware_compatibility?: string | null;
   citation: SourceCitation;
 };
 
@@ -93,6 +108,7 @@ export type GroupedMateResult = {
   match_reasons: string[];
   source_spec?: string | null;
   source_page?: number | null;
+  hardware_compatibility?: string | null;
   confidence_type: "deterministic";
 };
 

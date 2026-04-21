@@ -11,6 +11,7 @@ from pdf_storage.sync_83513_to_supabase import get_server_key, load_env_file, re
 from web_app.api.models import (
     GroupedSearchResult,
     GroupedMateResult,
+    HardwareOption,
     MateCandidate,
     PartDetail,
     SearchResult,
@@ -31,6 +32,7 @@ class ProductRepository(Protocol):
         shell_size_letter: str | None = None,
         shell_finish_code: str | None = None,
         gender: str | None = None,
+        contact_type: str | None = None,
         connector_type: str | None = None,
         limit: int = 25,
         offset: int = 0,
@@ -45,6 +47,7 @@ class ProductRepository(Protocol):
         shell_size_letter: str | None = None,
         shell_finish_code: str | None = None,
         gender: str | None = None,
+        contact_type: str | None = None,
         connector_type: str | None = None,
         limit: int = 25,
         offset: int = 0,
@@ -113,6 +116,85 @@ def rank_variant_key(source_part: PartDetail, candidate: dict[str, Any]) -> tupl
         revision,
         spec_sheet,
     )
+
+
+def hardware_options_from_extra_data(extra_data: Any) -> list[HardwareOption]:
+    if not isinstance(extra_data, dict):
+        return []
+    raw_options = extra_data.get("hardware_options")
+    if not isinstance(raw_options, list):
+        return []
+
+    options: list[HardwareOption] = []
+    for item in raw_options:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        description = item.get("description")
+        if code and description:
+            options.append(HardwareOption(code=str(code), description=str(description)))
+    return options
+
+
+def wire_range_from_options(wire_options: list[WireOption]) -> str | None:
+    awg_values: set[int] = set()
+    for option in wire_options:
+        text = " ".join(
+            value
+            for value in (option.wire_specification, option.wire_notes)
+            if value
+        )
+        upper_text = text.upper()
+        for token in ("20", "21", "22", "23", "24", "25", "26", "27", "28", "30"):
+            if f"{token} AWG" in upper_text or f"-{token}-" in text or f"-{token}(" in text:
+                awg_values.add(int(token))
+
+    if not awg_values:
+        return None
+    minimum = min(awg_values)
+    maximum = max(awg_values)
+    if minimum == maximum:
+        return f"{minimum} AWG"
+    return f"{minimum}-{maximum} AWG"
+
+
+def format_torque_value(row: dict[str, Any]) -> str:
+    minimum = row.get("torque_min_in_lbf")
+    maximum = row.get("torque_max_in_lbf")
+    pieces: list[str] = []
+
+    if minimum is not None and maximum is not None:
+        minimum_value = float(minimum)
+        maximum_value = float(maximum)
+        if minimum_value == maximum_value:
+            pieces.append(f"{minimum_value:g} in-lbf")
+        else:
+            pieces.append(f"{minimum_value:g}-{maximum_value:g} in-lbf")
+    elif row.get("torque_text"):
+        pieces.append(str(row["torque_text"]))
+
+    if row.get("fastener_thread"):
+        pieces.append(f"for {row['fastener_thread']}")
+    if row.get("arrangement_scope"):
+        pieces.append(f"({row['arrangement_scope']})")
+    if row.get("applies_to") and row.get("torque_min_in_lbf") is None:
+        pieces.append(f"per {row['applies_to']}")
+    if row.get("spec_sheet"):
+        pieces.append(f"[{row['spec_sheet']} p. {row.get('source_page')}]")
+    return " ".join(pieces)
+
+
+def hardware_compatibility_for(source_part: PartDetail, candidate: dict[str, Any]) -> str | None:
+    candidate_hardware_ref = candidate.get("mounting_hardware_ref")
+    if source_part.mounting_hardware_ref and candidate_hardware_ref:
+        if source_part.mounting_hardware_ref == candidate_hardware_ref:
+            return f"Shared hardware reference: {source_part.mounting_hardware_ref}"
+        return f"Review hardware references: {source_part.mounting_hardware_ref} and {candidate_hardware_ref}"
+    if source_part.mounting_hardware_ref:
+        return f"Source part hardware reference: {source_part.mounting_hardware_ref}"
+    if candidate_hardware_ref:
+        return f"Mate hardware reference: {candidate_hardware_ref}"
+    return None
 
 
 class SupabaseRestRepository:
@@ -199,6 +281,8 @@ class SupabaseRestRepository:
             name=row["name"],
             description=row.get("description"),
             connector_type=row.get("connector_type"),
+            gender=row.get("gender"),
+            contact_type=row.get("contact_type"),
             cavity_count=row.get("cavity_count"),
             shell_size_letter=row.get("shell_size_letter"),
             shell_finish_code=row.get("shell_finish_code"),
@@ -230,6 +314,10 @@ class SupabaseRestRepository:
             source_spec=citation.spec_sheet,
             source_page=citation.source_page,
             shell_finish_code=row.get("shell_finish_code"),
+            example_full_pin=row.get("example_full_pin"),
+            gender=row.get("gender"),
+            contact_type=row.get("contact_type"),
+            hardware_compatibility=hardware_compatibility_for(source_part, row),
             citation=citation,
         )
 
@@ -241,6 +329,7 @@ class SupabaseRestRepository:
         shell_size_letter: str | None = None,
         shell_finish_code: str | None = None,
         gender: str | None = None,
+        contact_type: str | None = None,
         connector_type: str | None = None,
     ) -> list[tuple[str, str]]:
         filters: list[tuple[str, str]] = [
@@ -251,6 +340,8 @@ class SupabaseRestRepository:
                 "name",
                 "description",
                 "connector_type",
+                "gender",
+                "contact_type",
                 "cavity_count",
                 "shell_size_letter",
                 "shell_finish_code",
@@ -276,6 +367,8 @@ class SupabaseRestRepository:
             filters.append(("shell_finish_code", f"eq.{shell_finish_code.upper()}"))
         if gender:
             filters.append(("gender", f"eq.{urllib.parse.quote(gender.upper(), safe='')}"))
+        if contact_type:
+            filters.append(("contact_type", f"eq.{urllib.parse.quote(contact_type.upper(), safe='')}"))
         if connector_type:
             filters.append(("connector_type", f"eq.{urllib.parse.quote(connector_type.upper(), safe='')}"))
         if query:
@@ -296,6 +389,7 @@ class SupabaseRestRepository:
         shell_size_letter: str | None = None,
         shell_finish_code: str | None = None,
         gender: str | None = None,
+        contact_type: str | None = None,
         connector_type: str | None = None,
         limit: int = 25,
         offset: int = 0,
@@ -307,6 +401,7 @@ class SupabaseRestRepository:
             shell_size_letter=shell_size_letter,
             shell_finish_code=shell_finish_code,
             gender=gender,
+            contact_type=contact_type,
             connector_type=connector_type,
         )
         filters.extend([("limit", str(limit)), ("offset", str(offset))])
@@ -326,6 +421,7 @@ class SupabaseRestRepository:
         shell_size_letter: str | None = None,
         shell_finish_code: str | None = None,
         gender: str | None = None,
+        contact_type: str | None = None,
         connector_type: str | None = None,
         limit: int = 25,
         offset: int = 0,
@@ -337,6 +433,7 @@ class SupabaseRestRepository:
             shell_size_letter=shell_size_letter,
             shell_finish_code=shell_finish_code,
             gender=gender,
+            contact_type=contact_type,
             connector_type=connector_type,
             limit=500,
             offset=0,
@@ -403,6 +500,35 @@ class SupabaseRestRepository:
             for row in rows
         ]
 
+    def _torque_values_for_row(self, row: dict[str, Any]) -> list[str]:
+        slash_sheets = [row["slash_sheet"]]
+        mounting_ref = row.get("mounting_hardware_ref")
+        if isinstance(mounting_ref, str) and mounting_ref.endswith("/5"):
+            slash_sheets.append("05")
+
+        query = [
+            ("select", ",".join([
+                "spec_sheet",
+                "slash_sheet",
+                "context",
+                "applies_to",
+                "fastener_thread",
+                "arrangement_scope",
+                "torque_min_in_lbf",
+                "torque_max_in_lbf",
+                "torque_text",
+                "source_page",
+            ])),
+            ("spec_family", "eq.83513"),
+            ("slash_sheet", f"in.({','.join(dict.fromkeys(slash_sheets))})"),
+            ("order", "slash_sheet.asc,context.asc,fastener_thread.asc,source_page.asc"),
+        ]
+        try:
+            rows, _ = self._request("torque_values", query=query)
+        except Exception:
+            return []
+        return [format_torque_value(torque_row) for torque_row in rows]
+
     def get_part(self, part_id: str) -> PartDetail | None:
         rows, _ = self._request(
             "base_configurations",
@@ -422,6 +548,7 @@ class SupabaseRestRepository:
                     "shell_finish_code",
                     "shell_finish_description",
                     "dimensions",
+                    "shell_material",
                     "mates_with",
                     "mounting_hardware_ref",
                     "example_full_pin",
@@ -430,6 +557,7 @@ class SupabaseRestRepository:
                     "source_page",
                     "revision",
                     "figure_references",
+                    "extra_data",
                 ])),
                 ("id", f"eq.{part_id}"),
                 ("limit", "1"),
@@ -439,6 +567,8 @@ class SupabaseRestRepository:
             return None
 
         row = rows[0]
+        wire_options = self._wire_options_for_part(part_id)
+        torque_values = self._torque_values_for_row(row)
         return PartDetail(
             id=row["id"],
             spec_family=row["spec_family"],
@@ -454,10 +584,14 @@ class SupabaseRestRepository:
             shell_finish_code=row.get("shell_finish_code"),
             shell_finish_description=row.get("shell_finish_description"),
             dimensions=row.get("dimensions"),
+            shell_material=row.get("shell_material"),
             mates_with=row.get("mates_with") or [],
             mounting_hardware_ref=row.get("mounting_hardware_ref"),
+            hardware_options=hardware_options_from_extra_data(row.get("extra_data")),
+            wire_range=wire_range_from_options(wire_options),
+            torque_values=torque_values,
             example_full_pin=row.get("example_full_pin"),
-            wire_options=self._wire_options_for_part(part_id),
+            wire_options=wire_options,
             citation=self._citation_from_row(row),
         )
 
@@ -482,6 +616,8 @@ class SupabaseRestRepository:
                 "gender",
                 "contact_type",
                 "shell_finish_code",
+                "example_full_pin",
+                "mounting_hardware_ref",
                 "source_document",
                 "source_url",
                 "source_page",
@@ -525,6 +661,7 @@ class SupabaseRestRepository:
                     match_reasons=representative.match_reasons,
                     source_spec=representative.source_spec,
                     source_page=representative.source_page,
+                    hardware_compatibility=representative.hardware_compatibility,
                 )
             )
 

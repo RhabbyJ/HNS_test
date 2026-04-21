@@ -9,12 +9,12 @@ type SearchResultsProps = {
 type SearchCardData = {
   key: string;
   href: string;
+  pn: string;
   slashSheet: string;
-  connectorType?: string | null;
-  title: string;
-  lead: string;
+  description: string;
   cavityCount?: number | null;
-  shellSizeLetter?: string | null;
+  gender?: string | null;
+  contactType?: string | null;
   variantCount: number;
   availableFinishCodes: string[];
   citationSpecSheet: string;
@@ -35,15 +35,12 @@ function toSearchCardData(item: GroupedSearchResult | SearchResult): SearchCardD
   return {
     key: isGroupedSearchResult(item) ? item.search_family_key : representative.id,
     href: `/parts/${representative.id}`,
+    pn: representative.example_full_pin ?? "Not yet extracted",
     slashSheet: representative.slash_sheet,
-    connectorType: representative.connector_type,
-    title: representative.name,
-    lead:
-      representative.example_full_pin ??
-      representative.description ??
-      "No example part available.",
+    description: representative.description ?? representative.name,
     cavityCount: representative.cavity_count,
-    shellSizeLetter: representative.shell_size_letter,
+    gender: representative.gender,
+    contactType: representative.contact_type,
     variantCount: isGroupedSearchResult(item) ? item.variant_count : 1,
     availableFinishCodes,
     citationSpecSheet: representative.citation.spec_sheet,
@@ -51,16 +48,18 @@ function toSearchCardData(item: GroupedSearchResult | SearchResult): SearchCardD
 }
 
 export function SearchResults({ results }: SearchResultsProps) {
+  const resultItems = results?.grouped ? results.items : results?.raw_variants ?? [];
+
   if (!results) {
     return (
       <div className="empty">
-        Start with a part number, slash sheet, or cavity count. Search results stay tied to
+        Start with a PN, cavity count, plug/receptacle, or pin/socket. Search results stay tied to
         the extracted source citations so users can trace every result back to the spec.
       </div>
     );
   }
 
-  if (!results.items.length) {
+  if (!resultItems.length) {
     return <div className="empty">No parts matched the current filters.</div>;
   }
 
@@ -72,7 +71,7 @@ export function SearchResults({ results }: SearchResultsProps) {
           {results.total} {results.grouped ? "grouped results" : "raw variants"}
         </span>
       </div>
-      {results.items.map((item) => {
+      {resultItems.map((item) => {
         const card = toSearchCardData(item as GroupedSearchResult | SearchResult);
         return (
         <Link
@@ -81,13 +80,14 @@ export function SearchResults({ results }: SearchResultsProps) {
           href={card.href}
         >
           <div className="eyebrow">
-            Slash {card.slashSheet} | {card.connectorType ?? "Connector"}
+            Slash {card.slashSheet} | {card.citationSpecSheet}
           </div>
-          <h3 className="title">{card.title}</h3>
-          <p className="lead">{card.lead}</p>
+          <h3 className="title">{card.pn}</h3>
+          <p className="lead">{card.description}</p>
           <div className="meta">
             {card.cavityCount ? <span className="pill">{card.cavityCount} contacts</span> : null}
-            {card.shellSizeLetter ? <span className="pill">Shell {card.shellSizeLetter}</span> : null}
+            <span className="pill">{card.gender ?? "Not yet extracted"}</span>
+            <span className="pill">{card.contactType ?? "Not yet extracted"}</span>
             <span className="pill accent">
               {card.variantCount} {card.variantCount === 1 ? "variant" : "variants"}
             </span>

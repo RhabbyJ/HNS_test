@@ -137,6 +137,24 @@
         }
       }
     },
+    "torque_values": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["context", "source_page", "torque_text"],
+        "properties": {
+          "context": { "type": "string" },
+          "source_page": { "type": "integer" },
+          "torque_text": { "type": "string" },
+          "torque_min_in_lbf": { "type": ["number", "null"] },
+          "torque_max_in_lbf": { "type": ["number", "null"] },
+          "fastener_thread": { "type": ["string", "null"] },
+          "source_thread_label": { "type": ["string", "null"] },
+          "arrangement_scope": { "type": ["string", "null"] },
+          "applies_to": { "type": ["string", "null"] }
+        }
+      }
+    },
     "figure_references": {
       "type": "array",
       "items": {

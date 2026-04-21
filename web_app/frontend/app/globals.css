@@ -160,6 +160,17 @@ main {
   font-size: 1.2rem;
 }
 
+.text-link {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.text-link:hover {
+  color: #143f34;
+}
+
 .meta,
 .reasons,
 .citations {

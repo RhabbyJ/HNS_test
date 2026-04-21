@@ -48,6 +48,102 @@ create table if not exists public.hns_wire_options (
   is_space_approved boolean not null default false
 );
 
+create table if not exists public.torque_values (
+  id uuid primary key default gen_random_uuid(),
+  torque_key text not null unique,
+  spec_family text not null default '83513',
+  spec_sheet text not null,
+  slash_sheet text not null,
+  revision text not null,
+  context text not null,
+  applies_to text,
+  fastener_thread text,
+  source_thread_label text,
+  arrangement_scope text,
+  torque_min_in_lbf numeric(6,2),
+  torque_max_in_lbf numeric(6,2),
+  torque_text text not null,
+  source_document text not null,
+  source_page integer not null,
+  source_url text not null,
+  storage_path text not null,
+  extracted_at timestamptz not null default now()
+);
+
+create table if not exists public.document_torque_status (
+  id uuid primary key default gen_random_uuid(),
+  spec_family text not null default '83513',
+  spec_sheet text not null unique,
+  slash_sheet text not null,
+  revision text not null,
+  torque_profile_code text,
+  torque_mode text not null,
+  referenced_spec_sheet text,
+  extracted_row_count integer not null default 0,
+  canonical_row_count integer not null default 0,
+  audit_status text not null default 'pending',
+  extractor_version text,
+  last_extracted_at timestamptz,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.torque_profiles (
+  id uuid primary key default gen_random_uuid(),
+  profile_code text not null unique,
+  profile_name text not null,
+  source_spec_sheet text not null,
+  source_revision text,
+  source_page integer,
+  profile_status text not null default 'verified',
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.torque_profile_values (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references public.torque_profiles(id) on delete cascade,
+  context text not null,
+  fastener_thread text,
+  source_thread_label text,
+  arrangement_scope text,
+  torque_min_in_lbf numeric(6,2),
+  torque_max_in_lbf numeric(6,2),
+  normalized_fact_key text not null,
+  unique (profile_id, normalized_fact_key)
+);
+
+create table if not exists public.document_torque_profile_map (
+  id uuid primary key default gen_random_uuid(),
+  spec_sheet text not null references public.document_torque_status(spec_sheet) on delete cascade,
+  profile_id uuid not null references public.torque_profiles(id) on delete cascade,
+  mapping_type text not null,
+  unique (spec_sheet, profile_id)
+);
+
+create table if not exists public.torque_source_evidence (
+  id uuid primary key default gen_random_uuid(),
+  spec_sheet text not null,
+  slash_sheet text not null,
+  revision text not null,
+  profile_id uuid references public.torque_profiles(id) on delete set null,
+  source_document text not null,
+  source_page integer not null,
+  source_url text not null,
+  storage_path text not null,
+  torque_text text not null,
+  extracted_context text,
+  extracted_fastener_thread text,
+  extracted_source_thread_label text,
+  extracted_arrangement_scope text,
+  extracted_min_in_lbf numeric(6,2),
+  extracted_max_in_lbf numeric(6,2),
+  extractor_version text,
+  extracted_at timestamptz not null default now()
+);
+
 create table if not exists public.text_chunks (
   id uuid primary key default gen_random_uuid(),
   spec_family text not null default '83513',
@@ -85,6 +181,21 @@ create index if not exists idx_base_configurations_example_pin
 
 create index if not exists idx_hns_wire_options_lookup
   on public.hns_wire_options (base_config_id, wire_type_code);
+
+create index if not exists idx_torque_values_lookup
+  on public.torque_values (spec_family, slash_sheet, context);
+
+create index if not exists idx_document_torque_status_lookup
+  on public.document_torque_status (spec_family, slash_sheet, torque_mode);
+
+create index if not exists idx_torque_profile_values_lookup
+  on public.torque_profile_values (profile_id, context, fastener_thread);
+
+create index if not exists idx_document_torque_profile_map_lookup
+  on public.document_torque_profile_map (spec_sheet, mapping_type);
+
+create index if not exists idx_torque_source_evidence_lookup
+  on public.torque_source_evidence (spec_sheet, source_page);
 
 create index if not exists idx_text_chunks_lookup
   on public.text_chunks (spec_family, slash_sheet, page_number);
@@ -181,3 +292,59 @@ from public.base_configurations b
 join public.hns_wire_options w on w.base_config_id = b.id
 where b.spec_family = '83513' and b.slash_sheet = '03'
 order by b.cavity_count, b.shell_finish_code, w.wire_type_code;
+
+create or replace view public.v_83513_torque_values as
+select
+  spec_family,
+  slash_sheet,
+  spec_sheet,
+  revision,
+  context,
+  applies_to,
+  fastener_thread,
+  source_thread_label,
+  arrangement_scope,
+  torque_min_in_lbf,
+  torque_max_in_lbf,
+  torque_text,
+  source_page,
+  source_url
+from public.torque_values
+where spec_family = '83513'
+order by slash_sheet, context, fastener_thread, source_page;
+
+create or replace view public.v_83513_torque_document_summary as
+select
+  spec_family,
+  spec_sheet,
+  slash_sheet,
+  revision,
+  torque_mode,
+  referenced_spec_sheet,
+  torque_profile_code,
+  canonical_row_count,
+  audit_status,
+  last_extracted_at,
+  notes
+from public.document_torque_status
+where spec_family = '83513'
+order by case when slash_sheet ~ '^[0-9]+$' then slash_sheet::int else -1 end;
+
+create or replace view public.v_83513_torque_profile_values as
+select
+  p.profile_code,
+  p.profile_name,
+  p.source_spec_sheet,
+  p.source_revision,
+  p.profile_status,
+  v.context,
+  v.fastener_thread,
+  v.source_thread_label,
+  v.arrangement_scope,
+  v.torque_min_in_lbf,
+  v.torque_max_in_lbf,
+  v.normalized_fact_key
+from public.torque_profiles p
+join public.torque_profile_values v on v.profile_id = p.id
+where p.profile_code like 'm83513_%'
+order by p.profile_code, v.context, v.fastener_thread, v.arrangement_scope;

@@ -19,7 +19,7 @@ export default async function PartPage({ params }: PartPageProps) {
       <main>
         <div className="shell stack">
           <Link className="back-link" href="/">
-            ← Back to search
+            Back to search
           </Link>
           <PartOverview part={part} />
           <MateResults mates={mates} />

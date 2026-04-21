@@ -34,6 +34,13 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def representative_search_item(item: dict[str, Any]) -> dict[str, Any]:
+    representative = item.get("representative_variant")
+    if isinstance(representative, dict):
+        return representative
+    return item
+
+
 def resolve_part_id(client: TestClient, selector: dict[str, Any]) -> tuple[str | None, list[dict[str, Any]]]:
     params = {"q": selector["example_full_pin"], "limit": 10}
     if selector.get("slash_sheet"):
@@ -42,7 +49,9 @@ def resolve_part_id(client: TestClient, selector: dict[str, Any]) -> tuple[str |
     response.raise_for_status()
     items = response.json()["items"]
     exact_matches = [
-        item for item in items if item.get("example_full_pin") == selector["example_full_pin"]
+        representative_search_item(item)
+        for item in items
+        if representative_search_item(item).get("example_full_pin") == selector["example_full_pin"]
     ]
     if not exact_matches:
         return None, items

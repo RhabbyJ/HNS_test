@@ -2,9 +2,9 @@
 
 Minimal product frontend for the first HarnessMate user flow:
 
-- Search page
-- Part detail page
-- Grouped mate results
+- Search page with PN, cavity count, plug/receptacle, and pin/socket filters
+- Part detail page with compatibility, hardware, wire, and engineering sections
+- Grouped mate results with mating PN, match reasons, and known hardware compatibility
 
 Setup:
 

@@ -16,13 +16,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const q = readFirst(params.q);
   const slashSheet = readFirst(params.slash_sheet);
   const cavityCount = readFirst(params.cavity_count);
+  const gender = readFirst(params.gender);
+  const contactType = readFirst(params.contact_type);
 
   let results = null;
-  if (q || slashSheet || cavityCount) {
+  if (q || slashSheet || cavityCount || gender || contactType) {
     const query = new URLSearchParams();
     if (q) query.set("q", q);
     if (slashSheet) query.set("slash_sheet", slashSheet);
     if (cavityCount) query.set("cavity_count", cavityCount);
+    if (gender) query.set("gender", gender);
+    if (contactType) query.set("contact_type", contactType);
     results = await searchParts(query);
   }
 
@@ -40,8 +44,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <div className="grid">
           <SearchForm
             initialQuery={q}
-            initialSlashSheet={slashSheet}
             initialCavityCount={cavityCount}
+            initialGender={gender}
+            initialContactType={contactType}
           />
           <SearchResults results={results} />
         </div>

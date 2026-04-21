@@ -11,7 +11,7 @@ Planned first endpoints:
 
 Current implemented query surface:
 
-- `GET /search?q=&slash_sheet=&cavity_count=&shell_size_letter=&shell_finish_code=&gender=&connector_type=&limit=&offset=`
+- `GET /search?q=&slash_sheet=&cavity_count=&shell_size_letter=&shell_finish_code=&gender=&contact_type=&connector_type=&limit=&offset=`
 - `GET /search?...&grouped=false`
 - `GET /parts/{part_id}`
 - `GET /parts/{part_id}/mates`
