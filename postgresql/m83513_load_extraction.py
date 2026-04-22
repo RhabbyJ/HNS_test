@@ -18,6 +18,13 @@ from pdf_storage.sync_83513_to_supabase import (
 )
 
 
+CLASS_P_DOCUMENT_KEYS = {"6", "7", "8", "9"}
+
+
+def normalized_document_key(document_key: str) -> str:
+    return "base" if document_key == "base" else str(int(document_key))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Load MIL-DTL-83513 extraction JSON into normalized tables.")
     parser.add_argument("--input-json", type=Path, required=True, help="Path to the extraction JSON.")
@@ -45,16 +52,14 @@ def slash_sheet_sort_order(extraction: dict[str, Any]) -> int:
 
 
 def finish_map(extraction: dict[str, Any]) -> dict[str | None, str]:
+    if normalized_document_key(str(extraction["source"]["document_key"])) in CLASS_P_DOCUMENT_KEYS:
+        return {None: ""}
+
     option_map = {
-        item["code"]: item["description"]
+        item["code"].upper(): item["description"]
         for item in extraction.get("pin_components", {}).get("shell_finish_options", [])
+        if item.get("code")
     }
-    extracted_codes = extraction.get("finish_codes", [])
-    if extracted_codes:
-        return {
-            code: option_map.get(code, code)
-            for code in extracted_codes
-        }
     return option_map or {None: ""}
 
 
@@ -65,6 +70,21 @@ def insert_arrangement_map(extraction: dict[str, Any]) -> dict[int, list[str]]:
         arrangements.setdefault(cavity_count, [])
         arrangements[cavity_count].append(item["insert_arrangement"])
     return arrangements
+
+
+def orderable_insert_arrangements(extraction: dict[str, Any]) -> list[dict[str, Any]]:
+    return extraction.get("pin_components", {}).get("insert_arrangements", [])
+
+
+def configuration_rows_by_cavity(extraction: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    return {
+        int(config["cavity_count"]): config
+        for config in extraction.get("configuration_rows", [])
+    }
+
+
+def insert_arrangement_notes(extraction: dict[str, Any]) -> dict[str, str]:
+    return extraction.get("pin_components", {}).get("insert_arrangement_notes", {})
 
 
 def current_rating(extraction: dict[str, Any]) -> float | None:
@@ -205,7 +225,8 @@ def base_rows_for_general_spec(extraction: dict[str, Any]) -> list[dict[str, Any
 def base_rows_for_plug_receptacle(extraction: dict[str, Any]) -> list[dict[str, Any]]:
     source = extraction["source"]
     finish_descriptions = finish_map(extraction)
-    insert_map = insert_arrangement_map(extraction)
+    configuration_map = configuration_rows_by_cavity(extraction)
+    notes_by_insert = insert_arrangement_notes(extraction)
     attributes = extraction.get("attributes", {})
     figures = extraction.get("figure_references", [])
     mates_with = extraction.get("mates_with", [])
@@ -213,57 +234,59 @@ def base_rows_for_plug_receptacle(extraction: dict[str, Any]) -> list[dict[str, 
     components = extraction.get("pin_components", {}).get("components", [])
     rows: list[dict[str, Any]] = []
 
-    for config in extraction.get("configuration_rows", []):
-        cavity_count = int(config["cavity_count"])
-        shell_size = config["shell_size_letter"]
-        insert_arrangements = insert_map.get(cavity_count) or [None]
-        source_page = int(config["page_number"])
+    for insert in orderable_insert_arrangements(extraction):
+        cavity_count = int(insert["cavity_count"])
+        insert_arrangement = insert["insert_arrangement"]
+        config = configuration_map.get(cavity_count)
+        shell_size = config.get("shell_size_letter") if config else None
+        source_page = int(config["page_number"]) if config else 1
+        dimensions = config.get("dimensions") if config else None
 
-        for insert_arrangement in insert_arrangements:
-            for finish_code, finish_description in finish_descriptions.items():
-                example_full_pin = example_pin_for(prefix, insert_arrangement, components, finish_code)
+        for finish_code, finish_description in finish_descriptions.items():
+            example_full_pin = example_pin_for(prefix, insert_arrangement, components, finish_code)
 
-                rows.append(
-                    {
-                        "spec_family": "83513",
-                        "spec_sheet": source["spec_sheet"],
-                        "slash_sheet": slash_sheet_value(extraction),
-                        "connector_type": connector_type_code(extraction),
-                        "name": connector_name(extraction, cavity_count),
-                        "description": connector_description(extraction, cavity_count, finish_description),
-                        "cavity_count": cavity_count,
-                        "shell_size_letter": shell_size,
-                        "shell_size_description": f"{cavity_count} position",
-                        "dimensions": config["dimensions"],
-                        "shell_material": attributes.get("shell_material"),
-                        "shell_finish_code": finish_code,
-                        "shell_finish_description": finish_description,
-                        "shell_finish_notes": (
-                            "Interface critical shell finish from slash-sheet PIN."
-                            if finish_code
-                            else None
-                        ),
-                        "current_rating_per_contact": current_rating(extraction),
-                        "contact_type": attributes.get("contact_type"),
-                        "gender": attributes.get("gender"),
-                        "class": attributes.get("class"),
-                        "polarization": attributes.get("polarization"),
-                        "mates_with": mates_with,
-                        "mounting_hardware_ref": attributes.get("mounting_hardware_ref"),
-                        "insert_arrangement_ref": insert_arrangement,
-                        "source_document": source["spec_sheet"],
-                        "source_page": source_page,
-                        "source_url": source["source_url"],
-                        "revision": source["revision"],
-                        "confidence_score": extraction["confidence_score"],
-                        "example_full_pin": example_full_pin,
-                        "figure_references": figures,
-                        "extra_data": extraction_extra_data(
-                            extraction,
-                            pin_components=extraction.get("pin_components"),
-                        ),
-                    }
-                )
+            rows.append(
+                {
+                    "spec_family": "83513",
+                    "spec_sheet": source["spec_sheet"],
+                    "slash_sheet": slash_sheet_value(extraction),
+                    "connector_type": connector_type_code(extraction),
+                    "name": connector_name(extraction, cavity_count),
+                    "description": connector_description(extraction, cavity_count, finish_description),
+                    "cavity_count": cavity_count,
+                    "shell_size_letter": shell_size,
+                    "shell_size_description": f"{cavity_count} position",
+                    "dimensions": dimensions,
+                    "shell_material": attributes.get("shell_material"),
+                    "shell_finish_code": finish_code,
+                    "shell_finish_description": finish_description,
+                    "shell_finish_notes": (
+                        "Interface critical shell finish from slash-sheet PIN."
+                        if finish_code
+                        else None
+                    ),
+                    "current_rating_per_contact": current_rating(extraction),
+                    "contact_type": attributes.get("contact_type"),
+                    "gender": attributes.get("gender"),
+                    "class": attributes.get("class"),
+                    "polarization": attributes.get("polarization"),
+                    "mates_with": mates_with,
+                    "mounting_hardware_ref": attributes.get("mounting_hardware_ref"),
+                    "insert_arrangement_ref": insert_arrangement,
+                    "source_document": source["spec_sheet"],
+                    "source_page": source_page,
+                    "source_url": source["source_url"],
+                    "revision": source["revision"],
+                    "confidence_score": extraction["confidence_score"],
+                    "example_full_pin": example_full_pin,
+                    "figure_references": figures,
+                    "extra_data": extraction_extra_data(
+                        extraction,
+                        pin_components=extraction.get("pin_components"),
+                        insert_arrangement_note=notes_by_insert.get(insert_arrangement),
+                    ),
+                }
+            )
 
     return rows
 
@@ -342,11 +365,8 @@ def pcb_tail_description(extraction: dict[str, Any], cavity_count: int, finish_d
 def base_rows_for_pcb_tail(extraction: dict[str, Any]) -> list[dict[str, Any]]:
     source = extraction["source"]
     finish_descriptions = finish_map(extraction)
-    insert_map = insert_arrangement_map(extraction)
-    configuration_map = {
-        int(config["cavity_count"]): config
-        for config in extraction.get("configuration_rows", [])
-    }
+    configuration_map = configuration_rows_by_cavity(extraction)
+    notes_by_insert = insert_arrangement_notes(extraction)
     attributes = extraction.get("attributes", {})
     figures = extraction.get("figure_references", [])
     mates_with = extraction.get("mates_with", [])
@@ -358,66 +378,68 @@ def base_rows_for_pcb_tail(extraction: dict[str, Any]) -> list[dict[str, Any]]:
     default_hardware = hardware_options[0]["code"] if hardware_options else None
     rows: list[dict[str, Any]] = []
 
-    for cavity_count, insert_arrangements in insert_map.items():
+    for insert in orderable_insert_arrangements(extraction):
+        cavity_count = int(insert["cavity_count"])
+        insert_arrangement = insert["insert_arrangement"]
         config = configuration_map.get(cavity_count)
         dimensions = config["dimensions"] if config else None
         source_page = int(config["page_number"]) if config else 1
-        for insert_arrangement in insert_arrangements:
-            for finish_code, finish_description in finish_descriptions.items():
-                example_full_pin = example_pin_for(
-                    prefix,
-                    insert_arrangement,
-                    components,
-                    finish_code,
-                    termination_code=default_termination,
-                    hardware_code=default_hardware,
-                )
+        for finish_code, finish_description in finish_descriptions.items():
+            example_full_pin = example_pin_for(
+                prefix,
+                insert_arrangement,
+                components,
+                finish_code,
+                termination_code=default_termination,
+                hardware_code=default_hardware,
+            )
 
-                rows.append(
-                    {
-                        "spec_family": "83513",
-                        "spec_sheet": source["spec_sheet"],
-                        "slash_sheet": slash_sheet_value(extraction),
-                        "connector_type": connector_type_code(extraction),
-                        "name": pcb_tail_name(extraction, cavity_count),
-                        "description": pcb_tail_description(extraction, cavity_count, finish_description),
-                        "cavity_count": cavity_count,
-                        "shell_size_letter": None,
-                        "shell_size_description": f"{cavity_count} position",
-                        "dimensions": dimensions,
-                        "shell_material": attributes.get("shell_material"),
-                        "shell_finish_code": finish_code,
-                        "shell_finish_description": finish_description,
-                        "shell_finish_notes": (
-                            "Interface critical shell finish from slash-sheet PIN."
-                            if finish_code
-                            else None
-                        ),
-                        "current_rating_per_contact": current_rating(extraction),
-                        "contact_type": attributes.get("contact_type"),
-                        "gender": attributes.get("gender"),
-                        "class": attributes.get("class"),
-                        "polarization": attributes.get("polarization"),
-                        "mates_with": mates_with,
-                        "mounting_hardware_ref": attributes.get("mounting_hardware_ref"),
-                        "insert_arrangement_ref": insert_arrangement,
-                        "source_document": source["spec_sheet"],
-                        "source_page": source_page,
-                        "source_url": source["source_url"],
-                        "revision": source["revision"],
-                        "confidence_score": extraction["confidence_score"],
-                        "example_full_pin": example_full_pin,
-                        "figure_references": figures,
-                        "extra_data": extraction_extra_data(
-                            extraction,
-                            termination_length_options=termination_options,
-                            hardware_options=hardware_options,
-                            board_mount_style=attributes.get("board_mount_style"),
-                            profile=attributes.get("profile"),
-                            row_count=attributes.get("row_count"),
-                        ),
-                    }
-                )
+            rows.append(
+                {
+                    "spec_family": "83513",
+                    "spec_sheet": source["spec_sheet"],
+                    "slash_sheet": slash_sheet_value(extraction),
+                    "connector_type": connector_type_code(extraction),
+                    "name": pcb_tail_name(extraction, cavity_count),
+                    "description": pcb_tail_description(extraction, cavity_count, finish_description),
+                    "cavity_count": cavity_count,
+                    "shell_size_letter": None,
+                    "shell_size_description": f"{cavity_count} position",
+                    "dimensions": dimensions,
+                    "shell_material": attributes.get("shell_material"),
+                    "shell_finish_code": finish_code,
+                    "shell_finish_description": finish_description,
+                    "shell_finish_notes": (
+                        "Interface critical shell finish from slash-sheet PIN."
+                        if finish_code
+                        else None
+                    ),
+                    "current_rating_per_contact": current_rating(extraction),
+                    "contact_type": attributes.get("contact_type"),
+                    "gender": attributes.get("gender"),
+                    "class": attributes.get("class"),
+                    "polarization": attributes.get("polarization"),
+                    "mates_with": mates_with,
+                    "mounting_hardware_ref": attributes.get("mounting_hardware_ref"),
+                    "insert_arrangement_ref": insert_arrangement,
+                    "source_document": source["spec_sheet"],
+                    "source_page": source_page,
+                    "source_url": source["source_url"],
+                    "revision": source["revision"],
+                    "confidence_score": extraction["confidence_score"],
+                    "example_full_pin": example_full_pin,
+                    "figure_references": figures,
+                    "extra_data": extraction_extra_data(
+                        extraction,
+                        termination_length_options=termination_options,
+                        hardware_options=hardware_options,
+                        board_mount_style=attributes.get("board_mount_style"),
+                        profile=attributes.get("profile"),
+                        row_count=attributes.get("row_count"),
+                        insert_arrangement_note=notes_by_insert.get(insert_arrangement),
+                    ),
+                }
+            )
 
     return rows
 

@@ -25,8 +25,10 @@ BASE_DOC_ID_PATTERN = re.compile(
     r"^MIL-DTL-83513(?:/(?P<slash>\d+))?(?P<revision>[A-Z])(?:\((?P<change>\d+)\))?(?:\s+NOT\s+\d+)?$",
     re.IGNORECASE,
 )
-BASE_REVISION_DESCRIPTION_PATTERN = re.compile(
-    r"^Revision\s+(?P<revision>[A-Z])(?:\s+\((?P<note>[^)]*)\))?$",
+REVISION_DESCRIPTION_PATTERN = re.compile(
+    r"^Revision\s+(?P<revision>[A-Z])"
+    r"(?:\s+Amendment\s+(?P<amendment>\d+)(?:\s*-\s*[A-Za-z ]+)?)?"
+    r"(?:\s+\((?P<note>[^)]*)\))?$",
     re.IGNORECASE,
 )
 REVISION_HISTORY_ROW_PATTERN = re.compile(
@@ -56,6 +58,7 @@ class ResolvedDownload:
     pdf_url: str
     revision_letter: str
     revision_date: datetime
+    revision_description: str
 
 
 @dataclass(frozen=True)
@@ -132,8 +135,6 @@ def is_non_base_revision_description(description: str) -> bool:
         return True
     if "ADMINISTRATIVE" in upper_description or re.search(r"\bADMIN\b", upper_description):
         return True
-    if re.search(r"\bAMENDMENT\s+\d+\b", upper_description):
-        return True
     return False
 
 
@@ -186,15 +187,15 @@ def parse_revision_entries(page_html: str) -> list[RevisionEntry]:
         if is_non_base_revision_description(description):
             continue
 
-        base_revision = BASE_REVISION_DESCRIPTION_PATTERN.fullmatch(description)
-        if not base_revision:
+        revision = REVISION_DESCRIPTION_PATTERN.fullmatch(description)
+        if not revision:
             continue
 
         entry = RevisionEntry(
             image_token=match.group("token"),
             description=description,
             document_date=parse_assist_date(strip_tags(match.group("document_date"))),
-            revision_letter=base_revision.group(1),
+            revision_letter=revision.group("revision").upper(),
         )
         entries_by_token[entry.image_token] = entry
 
@@ -228,7 +229,7 @@ def parse_revision_entries(page_html: str) -> list[RevisionEntry]:
 
 def latest_base_revision(entries: list[RevisionEntry], expected_revision_letter: str | None = None) -> RevisionEntry:
     if not entries:
-        raise RuntimeError("No base letter revisions were found on the document page.")
+        raise RuntimeError("No letter revision or incorporated amendment rows were found on the document page.")
 
     if expected_revision_letter:
         normalized_expected = expected_revision_letter.upper()
@@ -281,6 +282,7 @@ def resolve_latest_revision_download(
         pdf_url=pdf_url,
         revision_letter=revision.revision_letter,
         revision_date=revision.document_date,
+        revision_description=revision.description,
     )
 
 
@@ -336,6 +338,7 @@ def download_latest_revision_bytes(
             pdf_url=final_pdf_url,
             revision_letter=resolved.revision_letter,
             revision_date=resolved.revision_date,
+            revision_description=resolved.revision_description,
         ),
         pdf_bytes=pdf_bytes,
     )

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -15,6 +16,8 @@ from hybrid_extraction.m83513_extraction_registry import (
     ALLOWED_CAVITY_COUNTS,
     ALLOWED_FINISH_CODES,
     DocumentTypeSpec,
+    EXPECTED_FINISH_CODES,
+    EXPECTED_INSERTS,
     document_type_for_key,
 )
 from pdf_storage.sync_83513_to_supabase import (
@@ -141,7 +144,10 @@ PIN_HEADER_PATTERN = re.compile(
 )
 FIGURE_PATTERN = re.compile(r"FIGURE\s+(?P<figure_no>\d+)\.?\s*(?P<title>[^.\n]+)?", re.IGNORECASE)
 INSERT_MAP_PATTERN = re.compile(r"(?P<insert>[A-Z])\s*=\s*(?P<cavity>0?9|15|21|25|31|37|51|100)\b")
-FINISH_MAP_PATTERN = re.compile(r"(?P<code>[ACKNPT])\s*=\s*(?P<description>[A-Za-z][A-Za-z ,()/-]+)")
+FINISH_MAP_PATTERN = re.compile(
+    r"(?P<code>[ACKNPT])\s*=\s*(?P<description>[A-Za-z][A-Za-z ,()/-]+)",
+    re.IGNORECASE,
+)
 TERMINATION_LENGTH_PATTERN = re.compile(r"(?P<code>\d{2})\s*=\s*(?P<length>\.\d{3})")
 HARDWARE_OPTION_PATTERN = re.compile(
     r"(?P<code>[NPTW])\s*=\s*(?P<description>No hardware or threaded insert|jackpost attach|threaded insert|jackpost and threaded insert)",
@@ -268,6 +274,8 @@ class ExtractionSource:
     source_url: str
     storage_path: str
     revision: str | None = None
+    source_sha256: str | None = None
+    source_size_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -380,6 +388,46 @@ def load_pdf_bytes(args: argparse.Namespace) -> bytes:
     raise RuntimeError("Provide either --pdf or --storage-path.")
 
 
+def word_lines_from_page(page: Any) -> list[str]:
+    words = page.extract_words(x_tolerance=1.5, y_tolerance=3, keep_blank_chars=False) or []
+    lines: list[list[dict[str, Any]]] = []
+    for word in sorted(words, key=lambda item: (round(float(item["top"]), 1), float(item["x0"]))):
+        top = float(word["top"])
+        if not lines or abs(top - float(lines[-1][0]["top"])) > 3:
+            lines.append([word])
+        else:
+            lines[-1].append(word)
+    return [
+        " ".join(item["text"] for item in sorted(line, key=lambda word: float(word["x0"])))
+        for line in lines
+    ]
+
+
+def pin_block_from_word_lines(lines: list[str]) -> str | None:
+    start_index: int | None = None
+    for index, line in enumerate(lines):
+        normalized = line.lower()
+        if "part or identifying number" in normalized or re.search(r"\bM83513/\d{1,2}\s*-", line, re.IGNORECASE):
+            start_index = index
+            break
+    if start_index is None:
+        return None
+
+    selected: list[str] = []
+    for line in lines[start_index : start_index + 90]:
+        if selected and re.search(r"\b(?:referenced documents|concluding material|amendment notations|changes from previous issue)\b", line, re.IGNORECASE):
+            break
+        selected.append(line)
+    return "\n".join(selected) if selected else None
+
+
+def append_pin_word_block(page: Any, text: str) -> str:
+    pin_block = pin_block_from_word_lines(word_lines_from_page(page))
+    if not pin_block or pin_block in text:
+        return text
+    return f"{text}\nWORD-LEVEL PIN BLOCK:\n{pin_block}"
+
+
 def extract_pages(pdf_bytes: bytes) -> list[str]:
     try:
         import pdfplumber
@@ -391,7 +439,7 @@ def extract_pages(pdf_bytes: bytes) -> list[str]:
     pages: list[str] = []
     with pdfplumber.open(_bytes_to_io(pdf_bytes)) as pdf:
         for page in pdf.pages:
-            pages.append(page.extract_text() or "")
+            pages.append(append_pin_word_block(page, page.extract_text() or ""))
     return pages
 
 
@@ -779,41 +827,95 @@ def parse_configuration_rows(pages: list[str]) -> list[dict[str, Any]]:
     return [deduped[key] for key in sorted(deduped, key=lambda item: item[0])]
 
 
+PCB_DIMENSION_LABELS_3 = ("A", "B", "D")
+PCB_DIMENSION_LABELS_4 = ("A", "B", "C", "D")
+PCB_DIMENSION_LABELS_5 = ("A", "B", "C", "D", "E")
+PCB_DIMENSION_LABELS_7_WITH_C = ("A", "B", "C", "D", "E", "F", "G")
+PCB_DIMENSION_LABELS_7_WITH_H = ("A", "B", "D", "E", "F", "G", "H")
+
+
+def decimal_token(token: str) -> str | None:
+    normalized = token.strip(",;")
+    if re.fullmatch(r"\d*\.\d+", normalized):
+        return normalized
+    return None
+
+
+def header_has_dimension_label(header_text: str, label: str) -> bool:
+    return bool(re.search(rf"\b{label}\b", header_text.upper()))
+
+
+def pcb_dimension_header_fragment(text: str) -> str:
+    first_row = re.search(r"(?:^|\s)(?:9|15|21|25|31|37|51|100)\s+\d*\.\d+", text)
+    if not first_row:
+        return text
+    return text[: first_row.start()]
+
+
+def pcb_dimension_labels_from_header(header_text: str) -> tuple[str, ...] | None:
+    header_text = pcb_dimension_header_fragment(header_text)
+    if "NUMBER" not in header_text.upper() or "CONTACT" not in header_text.upper():
+        return None
+    if header_has_dimension_label(header_text, "H"):
+        return PCB_DIMENSION_LABELS_7_WITH_H
+    if header_has_dimension_label(header_text, "F") and header_has_dimension_label(header_text, "G"):
+        return PCB_DIMENSION_LABELS_7_WITH_C
+    if header_has_dimension_label(header_text, "E"):
+        return PCB_DIMENSION_LABELS_5
+    if header_has_dimension_label(header_text, "C"):
+        return PCB_DIMENSION_LABELS_4
+    if header_has_dimension_label(header_text, "D"):
+        return PCB_DIMENSION_LABELS_3
+    return None
+
+
 def parse_pcb_configuration_rows(pages: list[str], valid_cavity_counts: set[int] | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    dimension_labels = ("A", "B", "D", "E", "F", "G", "H")
 
     for page_number, page in enumerate(pages, start=1):
+        active_labels: tuple[str, ...] | None = None
+        header_lines: list[str] = []
         for raw_line in page.splitlines():
             line = " ".join(raw_line.split())
             tokens = line.split()
             if not tokens:
                 continue
 
-            cavity_token = tokens[0].rstrip(".")
-            if cavity_token not in VALID_CAVITY_TOKEN_VALUES:
-                continue
+            header_lines.append(line)
+            header_lines = header_lines[-6:]
+            labels_from_header = pcb_dimension_labels_from_header(" ".join(header_lines))
+            if labels_from_header:
+                active_labels = labels_from_header
 
-            cavity_count = int(cavity_token)
-            if valid_cavity_counts and cavity_count not in valid_cavity_counts:
-                continue
+            for index, token in enumerate(tokens):
+                if token not in VALID_CAVITY_TOKEN_VALUES:
+                    continue
 
-            decimals = [token for token in tokens[1:] if re.fullmatch(r"\d*\.\d+", token)]
-            if len(decimals) < 6:
-                continue
+                cavity_count = int(token)
+                if valid_cavity_counts and cavity_count not in valid_cavity_counts:
+                    continue
 
-            dimensions = {"unit": "inch"}
-            for label, value in zip(dimension_labels, decimals[: len(dimension_labels)], strict=False):
-                dimensions[label] = float(value)
+                labels = active_labels
+                if not labels:
+                    continue
 
-            rows.append(
-                {
-                    "page_number": page_number,
-                    "cavity_count": cavity_count,
-                    "shell_size_letter": None,
-                    "dimensions": dimensions,
-                }
-            )
+                candidate_values = [value for next_token in tokens[index + 1 :] if (value := decimal_token(next_token))]
+                decimals = candidate_values[: len(labels)]
+                if len(decimals) < len(labels):
+                    continue
+
+                dimensions = {"unit": "inch"}
+                for label, value in zip(labels, decimals, strict=False):
+                    dimensions[label] = float(value)
+
+                rows.append(
+                    {
+                        "page_number": page_number,
+                        "cavity_count": cavity_count,
+                        "shell_size_letter": None,
+                        "dimensions": dimensions,
+                    }
+                )
 
     deduped = {row["cavity_count"]: row for row in rows}
     return [deduped[key] for key in sorted(deduped)]
@@ -872,6 +974,60 @@ def mounting_hardware_components(document_key: str, text: str) -> dict[str, Any]
     }
 
 
+def normalized_document_key(document_key: str) -> str:
+    return "base" if document_key == "base" else str(int(document_key))
+
+
+def pin_block_text(text: str) -> str:
+    markers = [
+        r"Part or Identifying Number \(PIN\)",
+        r"Part or Identifying Number",
+        r"\bM83513/\d{1,2}\s*-",
+    ]
+    starts = [match.start() for pattern in markers for match in re.finditer(pattern, text, re.IGNORECASE)]
+    if not starts:
+        return text
+    start = min(starts)
+    tail = text[start:]
+    end_match = re.search(
+        r"\b(?:Referenced documents|CONCLUDING MATERIAL|Amendment notations|Changes from previous issue)\b",
+        tail,
+        re.IGNORECASE,
+    )
+    return tail[: end_match.start()] if end_match else tail
+
+
+def parse_insert_map_from_pin_text(pin_text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in INSERT_MAP_PATTERN.finditer(pin_text):
+        insert = match.group("insert").upper()
+        if insert in seen:
+            continue
+        seen.add(insert)
+        rows.append(
+            {
+                "insert_arrangement": insert,
+                "cavity_count": int(match.group("cavity").rstrip(".")),
+            }
+        )
+    return rows
+
+
+def parse_finish_map_from_pin_text(pin_text: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for match in FINISH_MAP_PATTERN.finditer(pin_text):
+        code = match.group("code").upper()
+        if code not in ALLOWED_FINISH_CODES or code in seen:
+            continue
+        seen.add(code)
+        description = " ".join(match.group("description").split())
+        canonical = CANONICAL_FINISH_DESCRIPTIONS.get(code)
+        rows.append({"code": code, "description": canonical or description})
+    return rows
+
+
 def parse_insert_arrangement_notes(text: str) -> dict[str, str]:
     notes: dict[str, str] = {}
     for arrangement, pattern in HJK_VARIANT_PATTERNS.items():
@@ -886,6 +1042,7 @@ def parse_insert_arrangement_notes(text: str) -> dict[str, str]:
 
 def parse_pin_components(pages: list[str], document_key: str, document_type: str) -> dict[str, Any]:
     text = "\n".join(pages)
+    pin_text = pin_block_text(text)
     if document_key == "base":
         return {
             "prefix": "M83513",
@@ -898,28 +1055,16 @@ def parse_pin_components(pages: list[str], document_key: str, document_type: str
             ],
         }
 
-    insert_map = [
-        {"insert_arrangement": match.group("insert"), "cavity_count": int(match.group("cavity").rstrip("."))}
-        for match in INSERT_MAP_PATTERN.finditer(text)
-    ]
+    insert_map = parse_insert_map_from_pin_text(pin_text)
     if document_type == "mounting_hardware":
         return mounting_hardware_components(document_key, text)
     if document_key in CLASS_P_DOCUMENT_KEYS:
         return class_p_pin_components(document_key, insert_map)
 
     header_match = PIN_HEADER_PATTERN.search(text)
-    finish_map: list[dict[str, str]] = []
-    seen_finish_codes: set[str] = set()
-    for match in FINISH_MAP_PATTERN.finditer(text):
-        code = match.group("code").upper()
-        if code not in ALLOWED_FINISH_CODES or code in seen_finish_codes:
-            continue
-        seen_finish_codes.add(code)
-        description = " ".join(match.group("description").split())
-        canonical = CANONICAL_FINISH_DESCRIPTIONS.get(code)
-        finish_map.append({"code": code, "description": canonical or description})
+    finish_map = parse_finish_map_from_pin_text(pin_text)
 
-    if not finish_map:
+    if not finish_map and normalized_document_key(document_key) not in EXPECTED_FINISH_CODES:
         finish_map = [
             {"code": code, "description": description}
             for code, description in CANONICAL_FINISH_DESCRIPTIONS.items()
@@ -1202,6 +1347,22 @@ def build_validation_checks(spec: DocumentTypeSpec, result: ExtractionResult) ->
             )
         )
 
+    empty_dimension_cavity_counts = sorted(
+        row["cavity_count"]
+        for row in result.configuration_rows
+        if spec.document_type == "pcb_tail" and not row.get("dimensions")
+    )
+    if empty_dimension_cavity_counts:
+        fallback_flags.append("empty_configuration_dimensions")
+        checks.append(
+            ValidationCheck(
+                status="warn",
+                code="empty_configuration_dimensions",
+                message="One or more PCB configuration rows were synthesized without parsed dimensions.",
+                details={"cavity_counts": empty_dimension_cavity_counts},
+            )
+        )
+
     insert_arrangement_count = len(result.pin_components.get("insert_arrangements", []))
     if spec.expected_min_insert_arrangements and insert_arrangement_count < spec.expected_min_insert_arrangements:
         fallback_flags.append("too_few_insert_arrangements")
@@ -1213,6 +1374,69 @@ def build_validation_checks(spec: DocumentTypeSpec, result: ExtractionResult) ->
                 details={"actual": insert_arrangement_count, "expected_min": spec.expected_min_insert_arrangements},
             )
         )
+
+    document_key = normalized_document_key(result.source.document_key)
+    expected_inserts = EXPECTED_INSERTS.get(document_key)
+    if expected_inserts is not None:
+        actual_inserts = [
+            item["insert_arrangement"]
+            for item in result.pin_components.get("insert_arrangements", [])
+        ]
+        if tuple(actual_inserts) != expected_inserts:
+            fallback_flags.append("unexpected_insert_arrangements")
+            checks.append(
+                ValidationCheck(
+                    status="fail",
+                    code="unexpected_insert_arrangements",
+                    message="Extracted insert arrangements do not match the expected orderable PIN set.",
+                    details={
+                        "actual": actual_inserts,
+                        "expected": list(expected_inserts),
+                        "missing": [code for code in expected_inserts if code not in actual_inserts],
+                        "extra": [code for code in actual_inserts if code not in expected_inserts],
+                    },
+                )
+            )
+        else:
+            checks.append(
+                ValidationCheck(
+                    status="pass",
+                    code="expected_insert_arrangements_present",
+                    message="Expected orderable insert arrangements were present.",
+                    details={"count": len(actual_inserts)},
+                )
+            )
+
+    expected_finish_codes = EXPECTED_FINISH_CODES.get(document_key)
+    if expected_finish_codes is not None:
+        actual_finish_codes = [
+            item["code"]
+            for item in result.pin_components.get("shell_finish_options", [])
+        ]
+        if tuple(actual_finish_codes) != expected_finish_codes:
+            fallback_flags.append("unexpected_shell_finish_codes")
+            checks.append(
+                ValidationCheck(
+                    status="fail",
+                    code="unexpected_shell_finish_codes",
+                    message="Extracted shell finish options do not match the expected PIN finish model.",
+                    details={
+                        "actual": actual_finish_codes,
+                        "expected": list(expected_finish_codes),
+                        "missing": [code for code in expected_finish_codes if code not in actual_finish_codes],
+                        "extra": [code for code in actual_finish_codes if code not in expected_finish_codes],
+                    },
+                )
+            )
+        else:
+            checks.append(
+                ValidationCheck(
+                    status="pass",
+                    code="expected_shell_finish_codes_present",
+                    message="Expected shell finish behavior was present.",
+                    details={"count": len(actual_finish_codes)},
+                )
+            )
 
     wire_option_count = len(result.wire_options)
     if spec.expected_min_wire_options and wire_option_count < spec.expected_min_wire_options:
@@ -1360,6 +1584,7 @@ def score_result(spec: DocumentTypeSpec, result: ExtractionResult) -> tuple[floa
 
 def extract_phase_one(args: argparse.Namespace) -> ExtractionResult:
     pdf_bytes = load_pdf_bytes(args)
+    pdf_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
     pages = extract_pages(pdf_bytes)
     document_spec = document_type_for_key(args.document_key)
     detected_spec_sheet = detect_spec_sheet_from_pages(pages)
@@ -1373,6 +1598,8 @@ def extract_phase_one(args: argparse.Namespace) -> ExtractionResult:
         source_url=args.source_url,
         storage_path=args.storage_path or str(args.pdf),
         revision=revision_match.group("revision") if revision_match else None,
+        source_sha256=pdf_sha256,
+        source_size_bytes=len(pdf_bytes),
     )
 
     page_summaries = [build_page_summary(page_number, text) for page_number, text in enumerate(pages, start=1)]
@@ -1399,7 +1626,11 @@ def extract_phase_one(args: argparse.Namespace) -> ExtractionResult:
     if pin_components.get("insert_arrangements"):
         cavity_counts = sorted({item["cavity_count"] for item in pin_components["insert_arrangements"]})
 
-    finish_codes = extract_finish_codes("\n".join(pages)) if "shell_finish_code" in pin_components.get("components", []) else []
+    finish_codes = sorted(
+        option["code"]
+        for option in pin_components.get("shell_finish_options", [])
+        if option.get("code")
+    )
 
     mates_with = sorted(
         {

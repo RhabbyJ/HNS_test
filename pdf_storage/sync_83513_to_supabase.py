@@ -9,8 +9,10 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import date
 from pathlib import Path
 
 from assist.assist_83513_common import (
@@ -56,6 +58,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional cap for testing only the first N documents.",
     )
+    parser.add_argument(
+        "--only",
+        nargs="*",
+        help="Optional document keys to sync, e.g. base 02 04.",
+    )
     return parser.parse_args()
 
 
@@ -86,6 +93,15 @@ def require_env(env: dict[str, str], key: str) -> str:
 
 def optional_env(env: dict[str, str], key: str, default: str = "") -> str:
     return env.get(key) or os.environ.get(key) or default
+
+
+def normalize_document_filter(value: str) -> str:
+    normalized = value.strip().lower().lstrip("/")
+    if normalized == "base":
+        return "base"
+    if not normalized.isdigit():
+        raise RuntimeError(f"Invalid document key for --only: {value}")
+    return str(int(normalized))
 
 
 def get_server_key(env: dict[str, str]) -> str:
@@ -174,6 +190,11 @@ class SimpleTableQuery:
         self._headers["Prefer"] = "return=representation"
         return self
 
+    def select(self, columns: str = "*"):
+        self._method = "GET"
+        self._query["select"] = columns
+        return self
+
     def upsert(self, payload, on_conflict: str | None = None):
         self._method = "POST"
         self._payload = payload
@@ -250,6 +271,37 @@ def upload_pdf(storage_api, bucket_name: str, storage_path: str, pdf_bytes: byte
     )
 
 
+def sha256_hexdigest(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def try_download_existing_pdf(storage_api, bucket_name: str, storage_path: str) -> bytes | None:
+    try:
+        return storage_api.from_(bucket_name).download(storage_path)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+    except Exception as exc:
+        message = str(exc).lower()
+        if "404" in message or "not found" in message:
+            return None
+        raise
+
+
+def archive_storage_path(storage_path: str, checksum: str) -> str:
+    parent, file_name = storage_path.rsplit("/", 1)
+    stem, suffix = file_name.rsplit(".", 1)
+    return f"{parent}/archive/{stem}_archived_{checksum[:12]}.{suffix}"
+
+
+def archive_existing_pdf(storage_api, bucket_name: str, storage_path: str, pdf_bytes: bytes) -> str:
+    checksum = sha256_hexdigest(pdf_bytes)
+    archived_path = archive_storage_path(storage_path, checksum)
+    upload_pdf(storage_api, bucket_name, archived_path, pdf_bytes)
+    return archived_path
+
+
 def metadata_payload(document: dict, bucket_name: str, storage_path: str, resolved) -> dict:
     return {
         "spec_family": FAMILY_NAME,
@@ -267,6 +319,31 @@ def metadata_payload(document: dict, bucket_name: str, storage_path: str, resolv
         "is_latest": True,
         "last_checked_at": utc_timestamp(),
     }
+
+
+def existing_metadata(database_api, table_name: str, slash_sheet: str) -> dict | None:
+    response = (
+        database_api.table(table_name)
+        .select("document_date,storage_path,checksum,source_doc_id")
+        .eq("spec_family", FAMILY_NAME)
+        .eq("slash_sheet", slash_sheet)
+        .execute()
+    )
+    rows = response.data or []
+    return rows[0] if rows else None
+
+
+def reject_older_than_existing(existing_row: dict | None, candidate_date: date, document_key: str) -> None:
+    if not existing_row or not existing_row.get("document_date"):
+        return
+
+    stored_date = date.fromisoformat(str(existing_row["document_date"]))
+    if stored_date > candidate_date:
+        raise RuntimeError(
+            "Refusing to overwrite newer Storage metadata for "
+            f"{document_key}: existing document_date={stored_date.isoformat()}, "
+            f"candidate document_date={candidate_date.isoformat()}."
+        )
 
 
 def upsert_metadata(database_api, table_name: str, payload: dict) -> None:
@@ -299,9 +376,17 @@ def main() -> int:
             catalog["documents"],
             key=lambda item: sort_document_key(item["document_key"]),
         )
+        if args.only:
+            wanted = {normalize_document_filter(value) for value in args.only}
+            documents = [document for document in documents if document["document_key"] in wanted]
+            found = {document["document_key"] for document in documents}
+            missing = sorted(wanted.difference(found), key=sort_document_key)
+            if missing:
+                raise RuntimeError(f"No discovered documents matched --only: {', '.join(missing)}")
         if args.limit is not None:
             documents = documents[: args.limit]
 
+        args.catalog_out.parent.mkdir(parents=True, exist_ok=True)
         args.catalog_out.write_text(json.dumps(catalog, indent=2), encoding="utf-8")
 
         session = AssistSession()
@@ -327,6 +412,26 @@ def main() -> int:
                 file_name = build_output_name(document_key, downloaded.resolved.revision_letter)
                 storage_label = storage_document_label(document_key)
                 storage_path = f"{storage_prefix}/{storage_label}/{file_name}"
+                checksum = sha256_hexdigest(downloaded.pdf_bytes)
+                slash_sheet = document["slash_sheet"] or "base"
+                previous_metadata = (
+                    existing_metadata(supabase, metadata_table, slash_sheet) if metadata_table else None
+                )
+                reject_older_than_existing(
+                    previous_metadata,
+                    downloaded.resolved.revision_date.date(),
+                    document_key,
+                )
+                previous_bytes = try_download_existing_pdf(supabase.storage, bucket_name, storage_path)
+                previous_checksum = sha256_hexdigest(previous_bytes) if previous_bytes else None
+                archived_path = None
+                if previous_bytes and previous_checksum != checksum:
+                    archived_path = archive_existing_pdf(
+                        supabase.storage,
+                        bucket_name,
+                        storage_path,
+                        previous_bytes,
+                    )
                 upload_pdf(supabase.storage, bucket_name, storage_path, downloaded.pdf_bytes)
 
                 metadata_row = metadata_payload(
@@ -336,7 +441,7 @@ def main() -> int:
                     resolved=downloaded.resolved,
                 )
                 metadata_row["file_size_bytes"] = len(downloaded.pdf_bytes)
-                metadata_row["checksum"] = hashlib.sha256(downloaded.pdf_bytes).hexdigest()
+                metadata_row["checksum"] = checksum
                 if metadata_table:
                     upsert_metadata(supabase, metadata_table, metadata_row)
 
@@ -347,8 +452,12 @@ def main() -> int:
                         "ident_number": document["ident_number"],
                         "status": "uploaded",
                         "storage_path": storage_path,
+                        "archived_previous_path": archived_path,
+                        "previous_checksum": previous_checksum,
+                        "checksum": checksum,
                         "downloaded_revision": downloaded.resolved.revision_letter,
                         "downloaded_revision_date": downloaded.resolved.revision_date.date().isoformat(),
+                        "downloaded_revision_description": downloaded.resolved.revision_description,
                     }
                 )
             except Exception as exc:
@@ -368,6 +477,7 @@ def main() -> int:
 
         report["success_count"] = sum(1 for item in report["results"] if item["status"] == "uploaded")
         report["failure_count"] = sum(1 for item in report["results"] if item["status"] == "failed")
+        args.sync_report_out.parent.mkdir(parents=True, exist_ok=True)
         args.sync_report_out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     except Exception as exc:  # pragma: no cover
         print(f"Sync failed: {exc}", file=sys.stderr)

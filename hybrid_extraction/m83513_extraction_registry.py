@@ -8,6 +8,26 @@ from dataclasses import dataclass
 
 ALLOWED_CAVITY_COUNTS = (9, 15, 21, 25, 31, 37, 51, 100)
 ALLOWED_FINISH_CODES = ("A", "C", "K", "N", "P", "T")
+EXPECTED_INSERTS = {
+    "1": ("A", "B", "C", "D", "E", "F", "G", "H"),
+    "2": ("A", "B", "C", "D", "E", "F", "G", "H", "J", "K"),
+    "3": ("A", "B", "C", "D", "E", "F", "G", "H"),
+    "4": ("A", "B", "C", "D", "E", "F", "G", "H", "J", "K"),
+    "6": ("A", "B", "C", "D", "E", "F", "G"),
+    "7": ("A", "B", "C", "D", "E", "F", "G"),
+    "8": ("A", "B", "C", "D", "E", "F", "G"),
+    "9": ("A", "B", "C", "D", "E", "F", "G"),
+}
+EXPECTED_FINISH_CODES = {
+    "1": ALLOWED_FINISH_CODES,
+    "2": ALLOWED_FINISH_CODES,
+    "3": ALLOWED_FINISH_CODES,
+    "4": ALLOWED_FINISH_CODES,
+    "6": (),
+    "7": (),
+    "8": (),
+    "9": (),
+}
 
 
 @dataclass(frozen=True)

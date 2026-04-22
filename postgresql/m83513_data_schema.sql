@@ -202,6 +202,15 @@ create table if not exists public.extraction_runs (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.m83513_staged_payload_rows (
+  id uuid primary key default gen_random_uuid(),
+  run_id text not null,
+  table_name text not null,
+  slash_sheet text,
+  row_data jsonb not null,
+  loaded_at timestamptz not null default now()
+);
+
 create index if not exists idx_base_configurations_lookup
   on public.base_configurations (spec_family, slash_sheet, cavity_count, connector_type);
 
@@ -231,6 +240,12 @@ create index if not exists idx_text_chunks_lookup
 
 create index if not exists idx_extraction_runs_lookup
   on public.extraction_runs (spec_family, sort_order, created_at desc);
+
+create index if not exists idx_m83513_staged_payload_rows_run
+  on public.m83513_staged_payload_rows (run_id, table_name, slash_sheet);
+
+create index if not exists idx_m83513_staged_payload_rows_json
+  on public.m83513_staged_payload_rows using gin (row_data);
 
 create or replace view public.v_83513_documents as
 select

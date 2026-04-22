@@ -57,7 +57,7 @@ SNAPSHOT_TABLES = {
     "hns_wire_options": {
         "select": "*",
         "filters": [],
-        "order": "wire_type_code.asc",
+        "order": "base_config_id.asc,wire_type_code.asc,id.asc",
     },
     "torque_values": {
         "select": "*",
@@ -212,7 +212,10 @@ def fetch_documents(client: RestClient) -> list[dict[str, Any]]:
     rows = fetch_all(
         client,
         "pdf_objects",
-        select="slash_sheet,sort_order,revision_letter,title,storage_path,status,source_url",
+        select=(
+            "slash_sheet,sort_order,revision_letter,title,storage_path,status,source_url,"
+            "source_doc_id,document_date,checksum,file_size_bytes,bucket_name"
+        ),
         filters=[("spec_family", "eq.MIL-DTL-83513"), ("status", "eq.active")],
         order="sort_order.asc,slash_sheet.asc",
     )
@@ -288,6 +291,11 @@ def run_extractor_for_document(
     return {
         "slash_sheet": slash_sheet,
         "output_json": str(output_path),
+        "storage_path": document.get("storage_path"),
+        "storage_checksum": document.get("checksum"),
+        "storage_file_size_bytes": document.get("file_size_bytes"),
+        "source_doc_id": document.get("source_doc_id"),
+        "document_date": document.get("document_date"),
         "returncode": completed.returncode,
         "stdout": completed.stdout.strip(),
         "stderr": completed.stderr.strip(),
@@ -438,6 +446,7 @@ def summarize_base_rows(rows: list[dict[str, Any]], wire_rows: list[dict[str, An
         "base_rows": 0,
         "connector_rows": 0,
         "wire_rows": 0,
+        "insert_arrangements": set(),
         "shell_finish_codes": set(),
         "example_pin_missing": 0,
     })
@@ -447,6 +456,8 @@ def summarize_base_rows(rows: list[dict[str, Any]], wire_rows: list[dict[str, An
         entry["base_rows"] += 1
         if row.get("connector_type") not in {"GENERAL_SPECIFICATION", "MOUNTING_HARDWARE"}:
             entry["connector_rows"] += 1
+        if row.get("insert_arrangement_ref"):
+            entry["insert_arrangements"].add(row["insert_arrangement_ref"])
         if row.get("shell_finish_code") is not None:
             entry["shell_finish_codes"].add(row["shell_finish_code"])
         if row.get("connector_type") != "GENERAL_SPECIFICATION" and not row.get("example_full_pin"):
@@ -460,6 +471,7 @@ def summarize_base_rows(rows: list[dict[str, Any]], wire_rows: list[dict[str, An
     for slash_sheet, entry in summary.items():
         normalized[slash_sheet] = {
             **entry,
+            "insert_arrangements": sorted(entry["insert_arrangements"]),
             "shell_finish_codes": sorted(entry["shell_finish_codes"]),
         }
     return {
@@ -488,6 +500,82 @@ def documents_from_extractions(extractions: list[dict[str, Any]]) -> list[dict[s
             }
         )
     return sorted(documents, key=lambda row: -1 if row["slash_sheet"] == "base" else int(row["slash_sheet"]))
+
+
+def insert_arrangements_from_extraction(extraction: dict[str, Any] | None) -> list[str]:
+    if not extraction:
+        return []
+    return [
+        item["insert_arrangement"]
+        for item in extraction.get("pin_components", {}).get("insert_arrangements", [])
+        if item.get("insert_arrangement")
+    ]
+
+
+def source_version_checks(
+    documents: list[dict[str, Any]],
+    extractions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    documents_by_slash = {normalize_slash_sheet(document["slash_sheet"]): document for document in documents}
+    extractions_by_slash = {slash_sheet_value(extraction): extraction for extraction in extractions}
+
+    document_02 = documents_by_slash.get("02", {})
+    extraction_02 = extractions_by_slash.get("02")
+    source_02 = extraction_02.get("source", {}) if extraction_02 else {}
+    inserts_02 = insert_arrangements_from_extraction(extraction_02)
+    expected_inserts_02 = ["A", "B", "C", "D", "E", "F", "G", "H", "J", "K"]
+    source_doc_id = str(document_02.get("source_doc_id") or "")
+    storage_checksum = document_02.get("checksum")
+    extraction_checksum = source_02.get("source_sha256")
+
+    checks.append(
+        {
+            "name": "/02 Storage source is MIL-DTL-83513/2H Amendment 4",
+            "status": "pass"
+            if document_02.get("revision_letter") == "H"
+            and source_doc_id.upper().startswith("MIL-DTL-83513/2H(4)")
+            and document_02.get("document_date") == "2025-12-17"
+            else "fail",
+            "details": {
+                "source_doc_id": source_doc_id,
+                "document_date": document_02.get("document_date"),
+                "revision_letter": document_02.get("revision_letter"),
+                "storage_path": document_02.get("storage_path"),
+                "storage_checksum": storage_checksum,
+            },
+        }
+    )
+    checks.append(
+        {
+            "name": "/02 extraction metadata matches latest source and includes J,K",
+            "status": "pass"
+            if source_02.get("spec_sheet") == "MIL-DTL-83513/2H"
+            and source_02.get("revision") == "H"
+            and inserts_02 == expected_inserts_02
+            else "fail",
+            "details": {
+                "spec_sheet": source_02.get("spec_sheet"),
+                "revision": source_02.get("revision"),
+                "inserts": inserts_02,
+                "source_sha256": extraction_checksum,
+                "source_size_bytes": source_02.get("source_size_bytes"),
+            },
+        }
+    )
+    checks.append(
+        {
+            "name": "/02 extraction read the declared Storage object hash",
+            "status": "pass"
+            if storage_checksum and extraction_checksum == storage_checksum
+            else "fail",
+            "details": {
+                "storage_checksum": storage_checksum,
+                "extraction_source_sha256": extraction_checksum,
+            },
+        }
+    )
+    return checks
 
 
 def build_staged_torque_resolution(
@@ -645,6 +733,51 @@ def edge_checks(staged_summary: dict[str, Any]) -> list[dict[str, Any]]:
     base_by_slash = staged_summary["base"]["by_slash"]
     effective = staged_summary["effective_facts_by_slash"]
 
+    expected_base_rows = {
+        "01": 48,
+        "02": 60,
+        "03": 48,
+        "04": 60,
+        "06": 7,
+        "07": 7,
+        "08": 7,
+        "09": 7,
+    }
+    for slash_sheet, expected_count in expected_base_rows.items():
+        row = base_by_slash.get(slash_sheet, {})
+        checks.append(
+            {
+                "name": f"/{slash_sheet} staged base row count is {expected_count}",
+                "status": "pass" if row.get("base_rows") == expected_count else "fail",
+                "details": row,
+            }
+        )
+
+    expected_insert_sets = {
+        "02": ["A", "B", "C", "D", "E", "F", "G", "H", "J", "K"],
+        "04": ["A", "B", "C", "D", "E", "F", "G", "H", "J", "K"],
+    }
+    for slash_sheet, expected_inserts in expected_insert_sets.items():
+        row = base_by_slash.get(slash_sheet, {})
+        checks.append(
+            {
+                "name": f"/{slash_sheet} staged insert arrangements include H,J,K",
+                "status": "pass" if row.get("insert_arrangements") == expected_inserts else "fail",
+                "details": {"insert_arrangements": row.get("insert_arrangements", [])},
+            }
+        )
+
+    expected_wire_rows = {"03": 2784, "04": 3480, "08": 154, "09": 406}
+    for slash_sheet, expected_count in expected_wire_rows.items():
+        row = base_by_slash.get(slash_sheet, {})
+        checks.append(
+            {
+                "name": f"/{slash_sheet} staged wire row count is {expected_count}",
+                "status": "pass" if row.get("wire_rows") == expected_count else "fail",
+                "details": {"wire_rows": row.get("wire_rows", 0)},
+            }
+        )
+
     for slash_sheet in ("02", "04"):
         row = effective.get(slash_sheet, {})
         checks.append(
@@ -681,16 +814,22 @@ def edge_checks(staged_summary: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
-    for slash_sheet in ("03", "04"):
-        row = base_by_slash.get(slash_sheet, {})
-        checks.append(
-            {
-                "name": f"/{slash_sheet} crimp sheet has staged wire rows",
-                "status": "pass" if row.get("wire_rows", 0) > 0 else "fail",
-                "details": {"wire_rows": row.get("wire_rows", 0)},
-            }
-        )
     return checks
+
+
+def diff_edge_checks(diff_report: dict[str, Any]) -> list[dict[str, Any]]:
+    live_wire_missing = diff_report["live_missing_connector_fields"].get("Wire Range", 0)
+    staged_wire_missing = diff_report["staged_missing_connector_fields"].get("Wire Range", 0)
+    return [
+        {
+            "name": "staged missing Wire Range does not regress",
+            "status": "pass" if staged_wire_missing <= live_wire_missing else "fail",
+            "details": {
+                "live_missing_wire_range": live_wire_missing,
+                "staged_missing_wire_range": staged_wire_missing,
+            },
+        }
+    ]
 
 
 def main() -> int:
@@ -756,7 +895,10 @@ def main() -> int:
         "effective_facts_by_slash": staged_torque["effective_facts_by_slash"],
     }
     diff_report = build_diff_report(live_summary, staged_summary)
-    checks = edge_checks(staged_summary)
+    checks = []
+    checks.extend(source_version_checks(documents, extractions))
+    checks.extend(edge_checks(staged_summary))
+    checks.extend(diff_edge_checks(diff_report))
 
     report = {
         "run_id": run_id,
