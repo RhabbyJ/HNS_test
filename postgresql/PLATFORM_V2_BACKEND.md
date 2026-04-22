@@ -2,7 +2,9 @@
 
 This is the scalable backend target for moving beyond the MIL-DTL-83513 proof of concept.
 
-The v1 system remains the live serving path for now. V2 is additive: new schemas, a release-scoped canonical model, and payload generation from the already-verified extraction outputs.
+The v1 system remains the live serving path for now. V2 is additive: new schemas, a release-scoped canonical model, and cold-start payload generation from latest PDFs in Storage.
+
+V2 must prove it can rebuild the correct dataset from source. Do not migrate or copy V1 canonical tables into V2. V1 may be used only as a comparison baseline until V2 has passed a full cold-start rebuild, one additional refresh cycle, and API read cutover.
 
 ## Layer Model
 
@@ -58,17 +60,15 @@ Owns serving views.
 - `api.v_wire_options_current`
 - `api.v_torque_effective_current`
 
-## Current 83513 Seed Command
+## Current 83513 Cold-Start Command
 
-Build a v2 payload from the verified post-release outputs:
+Build a v2 release from current ASSIST discovery, latest PDFs in Storage, fresh extraction, and fresh canonicalization:
 
 ```powershell
-python structured_json_validation\build_83513_v2_release.py `
-  --outputs-dir structured_json_validation\staging\storage_refresh_02_full\staged\outputs `
-  --documents-json structured_json_validation\staging\storage_refresh_02_full\snapshot\documents.json `
-  --run-id platform_v2_seed_83513 `
-  --release-name 83513-v2-poc `
-  --created-from-run-id storage_refresh_02_full
+$env:PYTHONPATH='C:\Users\rjega\AppData\Roaming\Python\Python313\site-packages'
+python structured_json_validation\cold_start_83513_v2.py `
+  --run-id cold_start_v2_83513_proof `
+  --release-name 83513-v2-cold-proof
 ```
 
 Expected key counts:
@@ -82,14 +82,37 @@ Expected key counts:
 - `/04` configurations: 60
 - `/06-/09` configurations: 7 each, no finish suffixes
 
+The first cold-start proof wrote:
+
+- source manifest: `structured_json_validation/staging/cold_start_v2_83513_proof/source_manifest.json`
+- fresh extraction outputs: `structured_json_validation/staging/cold_start_v2_83513_proof/fresh_extraction_outputs/`
+- v2 release payloads: `structured_json_validation/staging/cold_start_v2_83513_proof/v2_payloads/`
+- acceptance report: `structured_json_validation/staging/cold_start_v2_83513_proof/cold_start_v2_report.json`
+
+Result: 32 gates passed, 0 failed.
+
+## Loading V2 Tables
+
+Apply `postgresql/platform_v2_schema.sql`, then load the cold-start payload:
+
+```powershell
+python structured_json_validation\load_platform_v2_release.py `
+  --payload-dir structured_json_validation\staging\cold_start_v2_83513_proof\v2_payloads `
+  --apply
+```
+
+Supabase REST must expose the `ingest`, `extract`, `catalog`, `publish`, and `api` schemas for the REST loader to work. If those schemas are not exposed, use a direct SQL migration/session or enable the schemas before loading.
+
 ## Migration Strategy
 
 1. Keep v1 live and stable.
 2. Apply `postgresql/platform_v2_schema.sql`.
-3. Generate and review the v2 payload for 83513.
-4. Add a DB loader for the v2 payloads once the schema is accepted.
-5. Point new API queries at `api.v_*_current`.
-6. Retire v1 slash-specific views only after the app no longer depends on them.
+3. Run the full cold-start V2 rebuild from Storage.
+4. Load and publish the V2 release.
+5. Compare V2 against PDF acceptance gates and V1 parity queries.
+6. Point new API queries at `api.v_*_current`.
+7. Run one more real refresh cycle through V2.
+8. Dump/archive V1, move it to a legacy schema or leave it read-only for a soak period, then delete V1 in a controlled cleanup.
 
 ## Design Rules
 

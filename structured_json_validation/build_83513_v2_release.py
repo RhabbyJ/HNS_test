@@ -46,6 +46,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--release-name", default=None)
     parser.add_argument("--created-from-run-id", default=None)
+    parser.add_argument(
+        "--release-status",
+        choices=["draft", "staged", "published", "archived"],
+        default="staged",
+    )
     parser.add_argument("--documents-json", type=Path, default=None)
     return parser.parse_args()
 
@@ -101,11 +106,15 @@ def load_document_metadata(path: Path | None) -> dict[str, dict[str, Any]]:
     rows = read_json(path)
     if isinstance(rows, dict) and "documents" in rows:
         rows = rows["documents"]
-    return {
-        normalize_slash(str(row["slash_sheet"])): row
-        for row in rows
-        if row.get("slash_sheet") is not None
-    }
+    metadata: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = row.get("slash_sheet")
+        if key is None:
+            key = row.get("document_key")
+        if key is None:
+            continue
+        metadata[normalize_slash(str(key))] = row
+    return metadata
 
 
 def field_presence(extraction: dict[str, Any]) -> dict[str, Any]:
@@ -536,6 +545,7 @@ def build_release_payload(
     *,
     release_name: str,
     created_from_run_id: str | None = None,
+    release_status: str = "staged",
     metadata_by_slash: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     metadata_by_slash = metadata_by_slash or {}
@@ -560,9 +570,9 @@ def build_release_payload(
                 "spec_family": SPEC_FAMILY,
                 "release_name": release_name,
                 "created_from_run_id": created_from_run_id,
-                "status": "staged",
-                "notes": "Generated from v1 extraction outputs for platform v2 canonical model.",
-                "published_at": None,
+                "status": release_status,
+                "notes": "Generated from fresh extraction outputs for platform v2 canonical model.",
+                "published_at": utc_now() if release_status == "published" else None,
             }
         ],
         "publish.active_releases": [
@@ -617,6 +627,7 @@ def main() -> int:
         extractions,
         release_name=release_name,
         created_from_run_id=args.created_from_run_id or run_id,
+        release_status=args.release_status,
         metadata_by_slash=metadata_by_slash,
     )
     output_dir = args.staging_root / run_id / "v2_payloads"
