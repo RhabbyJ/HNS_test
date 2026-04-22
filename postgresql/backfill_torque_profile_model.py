@@ -9,6 +9,7 @@ import re
 import sys
 import urllib.parse
 import urllib.request
+from urllib.error import HTTPError
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,7 +28,7 @@ EXTRACTOR_VERSION = "m83513_torque_profile_backfill_v1"
 PROFILE_05 = "m83513_05_main"
 PROFILE_PCB = "m83513_10_33_pcb_standard"
 PROFILE_08 = "m83513_08_provisional"
-REFERENCE_TO_05_SLASHES = {"01", "03", "06", "07", "09"}
+REFERENCE_TO_05_SLASHES = {"01", "02", "03", "04", "06", "07", "09"}
 PCB_STANDARD_SLASHES = {f"{number:02d}" for number in range(10, 34)}
 
 
@@ -72,8 +73,12 @@ class RestClient:
             headers["Prefer"] = prefer
 
         request = urllib.request.Request(url, headers=headers, data=data, method=method)
-        with urllib.request.urlopen(request, timeout=120) as response:
-            body = response.read()
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                body = response.read()
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"{method} {table} failed with HTTP {exc.code}: {body}") from exc
         return json.loads(body) if body else []
 
     def fetch(self, table: str, query: list[tuple[str, str]]) -> list[dict[str, Any]]:
@@ -117,6 +122,30 @@ def load_documents(outputs_dir: Path) -> list[dict[str, Any]]:
             }
         )
     return sorted(documents, key=lambda item: slash_sort_key(item["slash_sheet"]))
+
+
+def load_documents_from_database(client: RestClient) -> list[dict[str, Any]]:
+    rows = client.fetch(
+        "base_configurations",
+        query=[
+            ("select", "spec_family,spec_sheet,slash_sheet,revision"),
+            ("spec_family", "eq.83513"),
+            ("order", "slash_sheet.asc"),
+        ],
+    )
+    documents_by_slash: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        slash_sheet = row["slash_sheet"]
+        documents_by_slash.setdefault(
+            slash_sheet,
+            {
+                "spec_family": row["spec_family"],
+                "spec_sheet": row["spec_sheet"],
+                "slash_sheet": slash_sheet,
+                "revision": row["revision"],
+            },
+        )
+    return sorted(documents_by_slash.values(), key=lambda item: slash_sort_key(item["slash_sheet"]))
 
 
 def slash_sort_key(slash_sheet: str) -> tuple[int, str]:
@@ -170,31 +199,58 @@ def build_profiles(legacy_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         {
             "profile_code": PROFILE_05,
             "profile_name": "MIL-DTL-83513/5 verified mounting and mating torque",
+            "profile_kind": "canonical",
+            "source_of_truth_level": "audited_pdf_table",
+            "governing_spec_sheet": row_05["spec_sheet"],
+            "governing_revision": row_05["revision"],
             "source_spec_sheet": row_05["spec_sheet"],
             "source_revision": row_05["revision"],
             "source_page": 7,
             "profile_status": "verified",
+            "approval_status": "approved",
+            "approved_by": "manual_pdf_audit",
+            "approved_at": now,
             "notes": "Audited /05 page 7 Table I and Table II torque values.",
+            "version": 1,
+            "is_active": True,
             "updated_at": now,
         },
         {
             "profile_code": PROFILE_PCB,
             "profile_name": "MIL-DTL-83513/10 through /33 PCB hardware torque",
+            "profile_kind": "shared_derived",
+            "source_of_truth_level": "extracted_numeric_text",
+            "governing_spec_sheet": row_10["spec_sheet"],
+            "governing_revision": row_10["revision"],
             "source_spec_sheet": row_10["spec_sheet"],
             "source_revision": row_10["revision"],
             "source_page": row_10["source_page"],
             "profile_status": "provisional",
+            "approval_status": "pending",
+            "approved_by": None,
+            "approved_at": None,
             "notes": "Repeated extracted PCB hardware torque limits shared by /10 through /33; pending focused audit.",
+            "version": 1,
+            "is_active": True,
             "updated_at": now,
         },
         {
             "profile_code": PROFILE_08,
             "profile_name": "MIL-DTL-83513/8 mounting hardware torque",
+            "profile_kind": "provisional",
+            "source_of_truth_level": "extracted_numeric_text",
+            "governing_spec_sheet": row_08["spec_sheet"],
+            "governing_revision": row_08["revision"],
             "source_spec_sheet": row_08["spec_sheet"],
             "source_revision": row_08["revision"],
             "source_page": row_08["source_page"],
             "profile_status": "provisional",
+            "approval_status": "needs_review",
+            "approved_by": None,
+            "approved_at": None,
             "notes": "Single extracted /08 mounting torque row; pending focused audit.",
+            "version": 1,
+            "is_active": True,
             "updated_at": now,
         },
     ]
@@ -258,7 +314,7 @@ def build_status_rows(
         notes = None
 
         if slash_sheet == "05":
-            torque_mode = "canonical"
+            torque_mode = "owns_profile"
             audit_status = "verified"
             notes = "Canonical audited /05 torque profile."
         elif slash_sheet in REFERENCE_TO_05_SLASHES:
@@ -266,10 +322,10 @@ def build_status_rows(
             referenced_spec_sheet = "MIL-DTL-83513/5H"
             notes = "Source document references MIL-DTL-83513/5 for hardware torque."
         elif slash_sheet in PCB_STANDARD_SLASHES:
-            torque_mode = "direct_numeric"
+            torque_mode = "uses_shared_profile"
             notes = "Mapped to shared provisional PCB hardware torque profile."
         elif slash_sheet == "08":
-            torque_mode = "direct_numeric"
+            torque_mode = "needs_review"
             audit_status = "needs_review"
             notes = "Single extracted numeric torque row; needs focused audit."
         elif torque_rows:
@@ -290,6 +346,8 @@ def build_status_rows(
                 "extractor_version": EXTRACTOR_VERSION,
                 "last_extracted_at": last_extracted_at,
                 "notes": notes,
+                "version": 1,
+                "is_active": True,
                 "updated_at": now,
             }
         )
@@ -431,7 +489,7 @@ def main() -> int:
         raise RuntimeError("Missing SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY.")
     client = RestClient(require_env(env, "SUPABASE_URL"), server_key)
 
-    documents = load_documents(args.outputs_dir)
+    documents = load_documents_from_database(client) or load_documents(args.outputs_dir)
     legacy_rows = fetch_legacy_rows(client)
     profiles = build_profiles(legacy_rows)
 

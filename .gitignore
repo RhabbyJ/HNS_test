@@ -1,11 +1,13 @@
 __pycache__/
 *.pyc
 .vendor/
+.rebuild_vendor/
 .env.local
 assist/artifacts/
 pdf_storage/artifacts/
 structured_json_validation/outputs/
 structured_json_validation/audits/
+structured_json_validation/staging/
 web_app/frontend/.next/
 web_app/frontend/node_modules/
 web_app/frontend/.npm-cache/

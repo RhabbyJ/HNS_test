@@ -30,6 +30,100 @@ PART_NUMBER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MOUNTING_HARDWARE_PATTERN = re.compile(r"M83513/05-\d{2}(?:RP)?", re.IGNORECASE)
+CLASS_P_DOCUMENT_KEYS = {"6", "7", "8", "9"}
+CLASS_P_CRIMP_DOCUMENT_KEYS = {"8", "9"}
+M83513_05_HARDWARE_OPTIONS = [
+    {
+        "dash_number": "02",
+        "description": "Allen head jackscrew assembly, low profile",
+        "hardware_type": "jackscrew",
+        "drive": "allen",
+        "profile": "low",
+        "configuration_scope": "A/B",
+        "thread": "#2-56",
+    },
+    {
+        "dash_number": "03",
+        "description": "Allen head jackscrew assembly, high profile",
+        "hardware_type": "jackscrew",
+        "drive": "allen",
+        "profile": "high",
+        "configuration_scope": "A/B",
+        "thread": "#2-56",
+    },
+    {
+        "dash_number": "05",
+        "description": "Slot head jackscrew assembly, low profile",
+        "hardware_type": "jackscrew",
+        "drive": "slot",
+        "profile": "low",
+        "configuration_scope": "A/B",
+        "thread": "#2-56",
+    },
+    {
+        "dash_number": "06",
+        "description": "Slot head jackscrew assembly, high profile",
+        "hardware_type": "jackscrew",
+        "drive": "slot",
+        "profile": "high",
+        "configuration_scope": "A/B",
+        "thread": "#2-56",
+    },
+    {
+        "dash_number": "07",
+        "description": "Jackpost assembly",
+        "hardware_type": "jackpost",
+        "drive": None,
+        "profile": None,
+        "configuration_scope": "A/B",
+        "thread": "#2-56",
+    },
+    {
+        "dash_number": "12",
+        "description": "Allen head jackscrew assembly, low profile",
+        "hardware_type": "jackscrew",
+        "drive": "allen",
+        "profile": "low",
+        "configuration_scope": "C/100-cavity",
+        "thread": "#4-40",
+    },
+    {
+        "dash_number": "13",
+        "description": "Allen head jackscrew assembly, high profile",
+        "hardware_type": "jackscrew",
+        "drive": "allen",
+        "profile": "high",
+        "configuration_scope": "C/100-cavity",
+        "thread": "#4-40",
+    },
+    {
+        "dash_number": "15",
+        "description": "Slot head jackscrew assembly, low profile",
+        "hardware_type": "jackscrew",
+        "drive": "slot",
+        "profile": "low",
+        "configuration_scope": "C/100-cavity",
+        "thread": "#4-40",
+    },
+    {
+        "dash_number": "16",
+        "description": "Slot head jackscrew assembly, high profile",
+        "hardware_type": "jackscrew",
+        "drive": "slot",
+        "profile": "high",
+        "configuration_scope": "C/100-cavity",
+        "thread": "#4-40",
+    },
+    {
+        "dash_number": "17",
+        "description": "Jackpost assembly",
+        "hardware_type": "jackpost",
+        "drive": None,
+        "profile": None,
+        "configuration_scope": "C/100-cavity",
+        "thread": "#4-40",
+    },
+]
 REVISION_PATTERN = re.compile(
     r"MIL-DTL-83513(?:/\d{1,2})?(?P<revision>[A-Z])(?:\(\d+\))?(?:\s+NOT\s+\d+)?$",
     re.IGNORECASE,
@@ -72,6 +166,27 @@ TORQUE_REFERENCE_PATTERN = re.compile(
     r"(?:mating|mounting)\s+hardware\s+torque\s*:\s*(?P<text>.*?in accordance with\s+(?P<reference>MIL-DTL-83513/5))",
     re.IGNORECASE,
 )
+HARDWARE_REFERENCE_TO_05_PATTERN = re.compile(
+    r"mounting\s+and\s+mating\s+hardware\s*:\s*(?P<text>.*?MIL-DTL-83513/5(?:,\s*configuration[s]?\s*[A-C](?:\s+and\s+[A-C])?)?)",
+    re.IGNORECASE,
+)
+SOLDER_CUP_WIRE_LIMIT_PATTERN = re.compile(
+    r"(?:26\s+AWG\s+wire\s+is\s+the\s+maximum\s+wire\s+size\s+that\s+can\s+be\s+used\s+in\s+the\s+solder\s+cup|solder\s+cup\s+will\s+accept\s+size\s+26\s+AWG\s+maximum\s+wire)",
+    re.IGNORECASE,
+)
+REVERSE_GENDER_PATTERN = re.compile(
+    r"reverse\s+gender\s+contact.*?(?:shrouded\s+interface|interface)\.?",
+    re.IGNORECASE | re.DOTALL,
+)
+INTERFACIAL_SEAL_PATTERN = re.compile(
+    r"Interfacial\s+seal\s*:\s*(?P<text>.*?)(?:\.|\n)",
+    re.IGNORECASE,
+)
+HJK_VARIANT_PATTERNS = {
+    "H": re.compile(r"Insert\s+arrangement\s+H.*?(?=Insert\s+arrangement\s+[JK]|$)", re.IGNORECASE | re.DOTALL),
+    "J": re.compile(r"Insert\s+arrangement\s+J.*?(?=Insert\s+arrangement\s+K|$)", re.IGNORECASE | re.DOTALL),
+    "K": re.compile(r"Insert\s+arrangement\s+K.*?(?=\d+/\s|$)", re.IGNORECASE | re.DOTALL),
+}
 M83513_05_TORQUE_TABLE_ROWS = [
     (
         "mounting_torque",
@@ -420,6 +535,23 @@ def torque_source_excerpt(text: str, match_start: int, match_end: int) -> str:
     return " ".join(text[sentence_start:sentence_end].split())[:420]
 
 
+def normalize_text_snippet(text: str, max_length: int = 420) -> str:
+    return " ".join(text.split())[:max_length]
+
+
+def parse_hardware_reference_to_05(page_number: int, text: str) -> TorqueValue | None:
+    match = HARDWARE_REFERENCE_TO_05_PATTERN.search(text)
+    if not match:
+        return None
+    excerpt = normalize_text_snippet(match.group(0))
+    return TorqueValue(
+        context="hardware_reference",
+        source_page=page_number,
+        torque_text=excerpt,
+        applies_to="MIL-DTL-83513/5",
+    )
+
+
 def page_contains_m83513_05_torque_tables(page_number: int, text: str) -> bool:
     if page_number != 7:
         return False
@@ -454,6 +586,9 @@ def parse_torque_values(pages: list[str]) -> list[TorqueValue]:
     for page_number, raw_text in enumerate(pages, start=1):
         text = " ".join(raw_text.replace("\u2013", "-").replace("\u2014", "-").split())
         text = re.sub(r"\bpound\s+s\b", "pounds", text, flags=re.IGNORECASE)
+        hardware_reference = None if TORQUE_REFERENCE_PATTERN.search(text) else parse_hardware_reference_to_05(page_number, text)
+        if hardware_reference:
+            add(hardware_reference)
         if "torque" not in text.lower() and "inch pound" not in text.lower() and "inch-pound" not in text.lower():
             continue
 
@@ -690,6 +825,65 @@ def infer_dimensions(configuration_rows: list[dict[str, Any]]) -> dict[str, floa
     return configuration_rows[0]["dimensions"]
 
 
+def class_p_pin_components(document_key: str, insert_map: list[dict[str, Any]]) -> dict[str, Any]:
+    components = ["insert_arrangement", "wire_type_code"] if document_key in CLASS_P_CRIMP_DOCUMENT_KEYS else ["insert_arrangement"]
+    default_insert = insert_map[0]["insert_arrangement"] if insert_map else "A"
+    default_wire = "01" if "wire_type_code" in components else ""
+    return {
+        "prefix": f"M83513/{int(document_key):02d}",
+        "format_example": f"M83513/{int(document_key):02d}-{default_insert}{default_wire}",
+        "components": components,
+        "insert_arrangements": insert_map,
+        "shell_finish_options": [],
+    }
+
+
+def mounting_hardware_components(document_key: str, text: str) -> dict[str, Any]:
+    options = [
+        {
+            **option,
+            "pin": f"M83513/{int(document_key):02d}-{option['dash_number']}",
+        }
+        for option in M83513_05_HARDWARE_OPTIONS
+        if f"M83513/{int(document_key):02d}-{option['dash_number']}" in text
+        or f"M83513/{int(document_key):02d} - {option['dash_number']}" in text
+    ]
+    if not options:
+        options = [
+            {
+                **option,
+                "pin": f"M83513/{int(document_key):02d}-{option['dash_number']}",
+            }
+            for option in M83513_05_HARDWARE_OPTIONS
+        ]
+    return {
+        "prefix": f"M83513/{int(document_key):02d}",
+        "format_example": options[0]["pin"] if options else None,
+        "components": ["dash_number", "optional_rp_suffix"],
+        "insert_arrangements": [],
+        "shell_finish_options": [],
+        "hardware_options": options,
+        "optional_suffixes": [
+            {
+                "code": "RP",
+                "description": "Removal of broach petal required",
+            }
+        ],
+    }
+
+
+def parse_insert_arrangement_notes(text: str) -> dict[str, str]:
+    notes: dict[str, str] = {}
+    for arrangement, pattern in HJK_VARIANT_PATTERNS.items():
+        match = pattern.search(text)
+        if not match:
+            continue
+        snippet = normalize_text_snippet(match.group(0), max_length=360)
+        if "100" in snippet or "shroud" in snippet.lower() or "flange" in snippet.lower():
+            notes[arrangement] = snippet
+    return notes
+
+
 def parse_pin_components(pages: list[str], document_key: str, document_type: str) -> dict[str, Any]:
     text = "\n".join(pages)
     if document_key == "base":
@@ -704,12 +898,16 @@ def parse_pin_components(pages: list[str], document_key: str, document_type: str
             ],
         }
 
-    header_match = PIN_HEADER_PATTERN.search(text)
     insert_map = [
         {"insert_arrangement": match.group("insert"), "cavity_count": int(match.group("cavity").rstrip("."))}
         for match in INSERT_MAP_PATTERN.finditer(text)
     ]
+    if document_type == "mounting_hardware":
+        return mounting_hardware_components(document_key, text)
+    if document_key in CLASS_P_DOCUMENT_KEYS:
+        return class_p_pin_components(document_key, insert_map)
 
+    header_match = PIN_HEADER_PATTERN.search(text)
     finish_map: list[dict[str, str]] = []
     seen_finish_codes: set[str] = set()
     for match in FINISH_MAP_PATTERN.finditer(text):
@@ -738,6 +936,9 @@ def parse_pin_components(pages: list[str], document_key: str, document_type: str
         "insert_arrangements": insert_map,
         "shell_finish_options": finish_map,
     }
+    insert_notes = parse_insert_arrangement_notes(text)
+    if insert_notes:
+        payload["insert_arrangement_notes"] = insert_notes
     if document_type == "pcb_tail":
         payload["components"] = [
             "insert_arrangement",
@@ -821,6 +1022,77 @@ def parse_wire_options(pages: list[str]) -> list[dict[str, Any]]:
     return [deduped[key] for key in sorted(deduped)]
 
 
+def parse_wire_constraints(pages: list[str]) -> list[dict[str, Any]]:
+    constraints: list[dict[str, Any]] = []
+    for page_number, raw_text in enumerate(pages, start=1):
+        text = " ".join(raw_text.split())
+        match = SOLDER_CUP_WIRE_LIMIT_PATTERN.search(text)
+        if not match:
+            continue
+        constraints.append(
+            {
+                "constraint_type": "solder_cup_max_wire_size",
+                "max_awg": 26,
+                "source_page": page_number,
+                "source_text": normalize_text_snippet(match.group(0)),
+            }
+        )
+    return constraints
+
+
+def parse_connector_notes(pages: list[str]) -> dict[str, Any]:
+    joined = "\n".join(pages)
+    notes: dict[str, Any] = {}
+    reverse_gender_match = REVERSE_GENDER_PATTERN.search(joined)
+    if reverse_gender_match:
+        notes["reverse_gender_contact"] = normalize_text_snippet(reverse_gender_match.group(0), max_length=360)
+    seal_match = INTERFACIAL_SEAL_PATTERN.search(joined)
+    if seal_match:
+        notes["interfacial_seal"] = normalize_text_snippet(seal_match.group("text"))
+    return notes
+
+
+def hardware_reference_details(joined_text: str) -> dict[str, Any] | None:
+    if "MIL-DTL-83513/5" not in joined_text:
+        return None
+    details: dict[str, Any] = {
+        "reference": "MIL-DTL-83513/5",
+        "ordered_separately": "ordered separately" in joined_text.lower(),
+    }
+    applicable_dash_numbers: set[str] = set()
+    if re.search(r"arrangements?\s+A\s+through\s+G", joined_text, re.IGNORECASE):
+        dash_numbers = ["02", "03", "05", "06", "07"]
+        applicable_dash_numbers.update(dash_numbers)
+        details["A-G"] = {
+            "configuration_scope": "A/B",
+            "thread": "#2-56",
+            "hardware_dash_numbers": dash_numbers,
+        }
+    if re.search(r"arrangements?\s+[HJK]|100\s+cavity|configuration\s+C", joined_text, re.IGNORECASE):
+        dash_numbers = ["12", "13", "15", "16", "17"]
+        applicable_dash_numbers.update(dash_numbers)
+        details["100-cavity"] = {
+            "configuration_scope": "C",
+            "thread": "#4-40",
+            "hardware_dash_numbers": dash_numbers,
+        }
+    if applicable_dash_numbers:
+        details["hardware_options"] = [
+            {
+                "code": option["dash_number"],
+                "description": option["description"],
+                "hardware_type": option["hardware_type"],
+                "drive": option["drive"],
+                "profile": option["profile"],
+                "configuration_scope": option["configuration_scope"],
+                "thread": option["thread"],
+            }
+            for option in M83513_05_HARDWARE_OPTIONS
+            if option["dash_number"] in applicable_dash_numbers
+        ]
+    return details
+
+
 def infer_attributes(source: ExtractionSource, pages: list[str], configuration_rows: list[dict[str, Any]]) -> dict[str, Any]:
     title_upper = source.title.upper()
     joined = "\n".join(pages)
@@ -836,7 +1108,8 @@ def infer_attributes(source: ExtractionSource, pages: list[str], configuration_r
     board_mount_style = "Right Angle" if "RIGHT ANGLE" in title_upper else "Straight" if "STRAIGHT" in title_upper else None
     profile = "Narrow" if "NARROW PROFILE" in title_upper else "Standard" if "STANDARD PROFILE" in title_upper else None
     row_count_match = re.search(r"\b([234])\s+ROW\b", title_upper)
-    return {
+    connector_notes = parse_connector_notes(pages)
+    attributes = {
         "shell_material": shell_material,
         "gender": gender,
         "class": "M" if "CLASS M" in title_upper else "P" if "CLASS P" in title_upper else None,
@@ -850,6 +1123,15 @@ def infer_attributes(source: ExtractionSource, pages: list[str], configuration_r
         "insert_arrangement_map": insert_map,
         "mounting_hardware_ref": "MIL-DTL-83513/5" if "MIL-DTL-83513/5" in joined else None,
     }
+    wire_constraints = parse_wire_constraints(pages)
+    if wire_constraints:
+        attributes["wire_constraints"] = wire_constraints
+    if connector_notes:
+        attributes["connector_notes"] = connector_notes
+    details = hardware_reference_details(joined)
+    if details:
+        attributes["mounting_hardware_details"] = details
+    return attributes
 
 
 def synthesize_pcb_configuration_rows(pin_components: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1117,21 +1399,29 @@ def extract_phase_one(args: argparse.Namespace) -> ExtractionResult:
     if pin_components.get("insert_arrangements"):
         cavity_counts = sorted({item["cavity_count"] for item in pin_components["insert_arrangements"]})
 
+    finish_codes = extract_finish_codes("\n".join(pages)) if "shell_finish_code" in pin_components.get("components", []) else []
+
+    mates_with = sorted(
+        {
+            value
+            for page in page_summaries
+            for value in page.mates_with
+            if value != current_mate_reference(args.document_key)
+            and not (
+                document_spec.document_type != "mounting_hardware"
+                and value.upper() == "MIL-DTL-83513/5"
+            )
+        }
+    )
+
     result = ExtractionResult(
         source=source,
         connector_type=document_spec.connector_type,
         cavity_counts=cavity_counts,
         dimensions=infer_dimensions(configuration_rows),
-        mates_with=sorted(
-            {
-                value
-                for page in page_summaries
-                for value in page.mates_with
-                if value != current_mate_reference(args.document_key)
-            }
-        ),
+        mates_with=mates_with,
         example_parts=example_parts,
-        finish_codes=extract_finish_codes("\n".join(pages)),
+        finish_codes=finish_codes,
         wire_specs=sorted({value for page in page_summaries for value in page.wire_specs}),
         configuration_rows=configuration_rows,
         pin_components=pin_components,

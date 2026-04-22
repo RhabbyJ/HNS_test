@@ -184,6 +184,38 @@ def format_torque_value(row: dict[str, Any]) -> str:
     return " ".join(pieces)
 
 
+def format_effective_torque_value(row: dict[str, Any]) -> str:
+    minimum = row.get("torque_min_in_lbf")
+    maximum = row.get("torque_max_in_lbf")
+    pieces: list[str] = []
+
+    if minimum is not None and maximum is not None:
+        minimum_value = float(minimum)
+        maximum_value = float(maximum)
+        if minimum_value == maximum_value:
+            pieces.append(f"{minimum_value:g} in-lbf")
+        else:
+            pieces.append(f"{minimum_value:g}-{maximum_value:g} in-lbf")
+
+    if row.get("fastener_thread"):
+        pieces.append(f"for {row['fastener_thread']}")
+    if row.get("arrangement_scope"):
+        pieces.append(f"({row['arrangement_scope']})")
+
+    labels: list[str] = []
+    if row.get("governing_spec_sheet"):
+        labels.append(str(row["governing_spec_sheet"]))
+    if row.get("values_inherited"):
+        labels.append("inherited")
+    if row.get("needs_review"):
+        labels.append("needs review")
+    elif row.get("values_verified"):
+        labels.append("verified")
+    if labels:
+        pieces.append(f"[{', '.join(labels)}]")
+    return " ".join(pieces)
+
+
 def hardware_compatibility_for(source_part: PartDetail, candidate: dict[str, Any]) -> str | None:
     candidate_hardware_ref = candidate.get("mounting_hardware_ref")
     if source_part.mounting_hardware_ref and candidate_hardware_ref:
@@ -501,6 +533,38 @@ class SupabaseRestRepository:
         ]
 
     def _torque_values_for_row(self, row: dict[str, Any]) -> list[str]:
+        effective_query = [
+            ("select", ",".join([
+                "spec_sheet",
+                "slash_sheet",
+                "revision",
+                "torque_mode",
+                "resolved_profile_code",
+                "governing_spec_sheet",
+                "governing_revision",
+                "values_verified",
+                "values_inherited",
+                "needs_review",
+                "context",
+                "fastener_thread",
+                "source_thread_label",
+                "arrangement_scope",
+                "torque_min_in_lbf",
+                "torque_max_in_lbf",
+                "approval_status",
+                "profile_kind",
+                "source_of_truth_level",
+            ])),
+            ("slash_sheet", f"eq.{row['slash_sheet']}"),
+            ("order", "context.asc,fastener_thread.asc,arrangement_scope.asc,torque_min_in_lbf.asc"),
+        ]
+        try:
+            effective_rows, _ = self._request("v_83513_torque_effective_facts", query=effective_query)
+        except Exception:
+            effective_rows = []
+        if effective_rows:
+            return [format_effective_torque_value(torque_row) for torque_row in effective_rows]
+
         slash_sheets = [row["slash_sheet"]]
         mounting_ref = row.get("mounting_hardware_ref")
         if isinstance(mounting_ref, str) and mounting_ref.endswith("/5"):

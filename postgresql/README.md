@@ -8,6 +8,7 @@ This folder contains the normalized database schema and the loader code that map
 - `m83513_load_03.py`: `/03` compatibility wrapper
 - `m83513_load_torque_values.py`: legacy torque-only loader
 - `backfill_torque_profile_model.py`: Phase-1 normalized torque profile backfill
+- `TORQUE_LOADER_CONTRACT.md`: Phase-2 contract for evidence, interpretation, and canonical torque facts
 
 `torque_values` is now treated as a legacy/staging source for extracted torque candidates and evidence. The normalized Phase-1 torque model is:
 

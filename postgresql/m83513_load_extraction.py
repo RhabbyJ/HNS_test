@@ -44,7 +44,7 @@ def slash_sheet_sort_order(extraction: dict[str, Any]) -> int:
     return 0 if slash_sheet == "base" else int(slash_sheet)
 
 
-def finish_map(extraction: dict[str, Any]) -> dict[str, str]:
+def finish_map(extraction: dict[str, Any]) -> dict[str | None, str]:
     option_map = {
         item["code"]: item["description"]
         for item in extraction.get("pin_components", {}).get("shell_finish_options", [])
@@ -55,7 +55,7 @@ def finish_map(extraction: dict[str, Any]) -> dict[str, str]:
             code: option_map.get(code, code)
             for code in extracted_codes
         }
-    return option_map
+    return option_map or {None: ""}
 
 
 def insert_arrangement_map(extraction: dict[str, Any]) -> dict[int, list[str]]:
@@ -118,6 +118,49 @@ def connector_description(extraction: dict[str, Any], cavity_count: int, finish_
     return ", ".join(piece for piece in pieces if piece)
 
 
+def example_pin_for(
+    prefix: str | None,
+    insert_arrangement: str | None,
+    components: list[str],
+    finish_code: str | None,
+    *,
+    wire_type_code: str = "01",
+    termination_code: str | None = None,
+    hardware_code: str | None = None,
+) -> str | None:
+    if not prefix or not insert_arrangement:
+        return None
+    value = f"{prefix}-{insert_arrangement}"
+    if "wire_type_code" in components:
+        value += wire_type_code
+    if "termination_length_code" in components and termination_code:
+        value += termination_code
+    if "shell_finish_code" in components and finish_code:
+        value += finish_code
+    if "hardware_code" in components and hardware_code:
+        value += hardware_code
+    return value
+
+
+def extraction_extra_data(extraction: dict[str, Any], **extra: Any) -> dict[str, Any]:
+    attributes = extraction.get("attributes", {})
+    payload: dict[str, Any] = {
+        "document_type": extraction["source"]["document_type"],
+    }
+    for key in ("wire_constraints", "connector_notes", "mounting_hardware_details"):
+        if attributes.get(key):
+            payload[key] = attributes[key]
+    hardware_details = attributes.get("mounting_hardware_details")
+    if (
+        "hardware_options" not in extra
+        and isinstance(hardware_details, dict)
+        and hardware_details.get("hardware_options")
+    ):
+        payload["hardware_options"] = hardware_details["hardware_options"]
+    payload.update({key: value for key, value in extra.items() if value is not None})
+    return payload
+
+
 def base_rows_for_general_spec(extraction: dict[str, Any]) -> list[dict[str, Any]]:
     source = extraction["source"]
     return [
@@ -167,6 +210,7 @@ def base_rows_for_plug_receptacle(extraction: dict[str, Any]) -> list[dict[str, 
     figures = extraction.get("figure_references", [])
     mates_with = extraction.get("mates_with", [])
     prefix = extraction.get("pin_components", {}).get("prefix")
+    components = extraction.get("pin_components", {}).get("components", [])
     rows: list[dict[str, Any]] = []
 
     for config in extraction.get("configuration_rows", []):
@@ -177,12 +221,7 @@ def base_rows_for_plug_receptacle(extraction: dict[str, Any]) -> list[dict[str, 
 
         for insert_arrangement in insert_arrangements:
             for finish_code, finish_description in finish_descriptions.items():
-                example_full_pin = None
-                if prefix and insert_arrangement:
-                    if "wire_type_code" in extraction.get("pin_components", {}).get("components", []):
-                        example_full_pin = f"{prefix}-{insert_arrangement}01{finish_code}"
-                    else:
-                        example_full_pin = f"{prefix}-{insert_arrangement}{finish_code}"
+                example_full_pin = example_pin_for(prefix, insert_arrangement, components, finish_code)
 
                 rows.append(
                     {
@@ -199,7 +238,11 @@ def base_rows_for_plug_receptacle(extraction: dict[str, Any]) -> list[dict[str, 
                         "shell_material": attributes.get("shell_material"),
                         "shell_finish_code": finish_code,
                         "shell_finish_description": finish_description,
-                        "shell_finish_notes": "Interface critical shell finish from slash-sheet PIN.",
+                        "shell_finish_notes": (
+                            "Interface critical shell finish from slash-sheet PIN."
+                            if finish_code
+                            else None
+                        ),
                         "current_rating_per_contact": current_rating(extraction),
                         "contact_type": attributes.get("contact_type"),
                         "gender": attributes.get("gender"),
@@ -215,10 +258,10 @@ def base_rows_for_plug_receptacle(extraction: dict[str, Any]) -> list[dict[str, 
                         "confidence_score": extraction["confidence_score"],
                         "example_full_pin": example_full_pin,
                         "figure_references": figures,
-                        "extra_data": {
-                            "pin_components": extraction.get("pin_components"),
-                            "document_type": source["document_type"],
-                        },
+                        "extra_data": extraction_extra_data(
+                            extraction,
+                            pin_components=extraction.get("pin_components"),
+                        ),
                     }
                 )
 
@@ -260,11 +303,14 @@ def base_rows_for_mounting_hardware(extraction: dict[str, Any]) -> list[dict[str
             "confidence_score": extraction["confidence_score"],
             "example_full_pin": example_parts[0] if example_parts else None,
             "figure_references": extraction.get("figure_references", []),
-            "extra_data": {
-                "document_type": source["document_type"],
-                "example_parts": example_parts,
-                "finish_codes": extraction.get("finish_codes", []),
-            },
+            "extra_data": extraction_extra_data(
+                extraction,
+                example_parts=example_parts,
+                finish_codes=extraction.get("finish_codes", []),
+                pin_components=extraction.get("pin_components"),
+                hardware_options=extraction.get("pin_components", {}).get("hardware_options", []),
+                optional_suffixes=extraction.get("pin_components", {}).get("optional_suffixes", []),
+            ),
         }
     ]
 
@@ -305,6 +351,7 @@ def base_rows_for_pcb_tail(extraction: dict[str, Any]) -> list[dict[str, Any]]:
     figures = extraction.get("figure_references", [])
     mates_with = extraction.get("mates_with", [])
     prefix = extraction.get("pin_components", {}).get("prefix")
+    components = extraction.get("pin_components", {}).get("components", [])
     termination_options = extraction.get("pin_components", {}).get("termination_length_options", [])
     hardware_options = extraction.get("pin_components", {}).get("hardware_options", [])
     default_termination = termination_options[0]["code"] if termination_options else None
@@ -317,9 +364,14 @@ def base_rows_for_pcb_tail(extraction: dict[str, Any]) -> list[dict[str, Any]]:
         source_page = int(config["page_number"]) if config else 1
         for insert_arrangement in insert_arrangements:
             for finish_code, finish_description in finish_descriptions.items():
-                example_full_pin = None
-                if prefix and insert_arrangement and default_termination and default_hardware:
-                    example_full_pin = f"{prefix}-{insert_arrangement}{default_termination}{finish_code}{default_hardware}"
+                example_full_pin = example_pin_for(
+                    prefix,
+                    insert_arrangement,
+                    components,
+                    finish_code,
+                    termination_code=default_termination,
+                    hardware_code=default_hardware,
+                )
 
                 rows.append(
                     {
@@ -336,7 +388,11 @@ def base_rows_for_pcb_tail(extraction: dict[str, Any]) -> list[dict[str, Any]]:
                         "shell_material": attributes.get("shell_material"),
                         "shell_finish_code": finish_code,
                         "shell_finish_description": finish_description,
-                        "shell_finish_notes": "Interface critical shell finish from slash-sheet PIN.",
+                        "shell_finish_notes": (
+                            "Interface critical shell finish from slash-sheet PIN."
+                            if finish_code
+                            else None
+                        ),
                         "current_rating_per_contact": current_rating(extraction),
                         "contact_type": attributes.get("contact_type"),
                         "gender": attributes.get("gender"),
@@ -352,14 +408,14 @@ def base_rows_for_pcb_tail(extraction: dict[str, Any]) -> list[dict[str, Any]]:
                         "confidence_score": extraction["confidence_score"],
                         "example_full_pin": example_full_pin,
                         "figure_references": figures,
-                        "extra_data": {
-                            "document_type": source["document_type"],
-                            "termination_length_options": termination_options,
-                            "hardware_options": hardware_options,
-                            "board_mount_style": attributes.get("board_mount_style"),
-                            "profile": attributes.get("profile"),
-                            "row_count": attributes.get("row_count"),
-                        },
+                        "extra_data": extraction_extra_data(
+                            extraction,
+                            termination_length_options=termination_options,
+                            hardware_options=hardware_options,
+                            board_mount_style=attributes.get("board_mount_style"),
+                            profile=attributes.get("profile"),
+                            row_count=attributes.get("row_count"),
+                        ),
                     }
                 )
 

@@ -85,21 +85,44 @@ create table if not exists public.document_torque_status (
   extractor_version text,
   last_extracted_at timestamptz,
   notes text,
+  version integer not null default 1,
+  is_active boolean not null default true,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint document_torque_status_mode_check
+    check (torque_mode in ('canonical', 'owns_profile', 'uses_shared_profile', 'references_other_doc', 'no_torque', 'none', 'needs_review', 'direct_numeric')),
+  constraint document_torque_status_audit_check
+    check (audit_status in ('verified', 'pending', 'needs_review', 'stale'))
 );
 
 create table if not exists public.torque_profiles (
   id uuid primary key default gen_random_uuid(),
   profile_code text not null unique,
   profile_name text not null,
+  profile_kind text not null default 'provisional',
+  source_of_truth_level text not null default 'extracted_numeric_text',
+  governing_spec_sheet text,
+  governing_revision text,
   source_spec_sheet text not null,
   source_revision text,
   source_page integer,
   profile_status text not null default 'verified',
+  approval_status text not null default 'pending',
+  approved_by text,
+  approved_at timestamptz,
   notes text,
+  version integer not null default 1,
+  is_active boolean not null default true,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint torque_profiles_kind_check
+    check (profile_kind in ('canonical', 'shared_derived', 'document_specific', 'provisional')),
+  constraint torque_profiles_source_truth_check
+    check (source_of_truth_level in ('audited_pdf_table', 'extracted_numeric_text', 'reference_only')),
+  constraint torque_profiles_status_check
+    check (profile_status in ('verified', 'unverified', 'provisional')),
+  constraint torque_profiles_approval_check
+    check (approval_status in ('approved', 'pending', 'needs_review', 'rejected'))
 );
 
 create table if not exists public.torque_profile_values (
@@ -112,6 +135,8 @@ create table if not exists public.torque_profile_values (
   torque_min_in_lbf numeric(6,2),
   torque_max_in_lbf numeric(6,2),
   normalized_fact_key text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
   unique (profile_id, normalized_fact_key)
 );
 
@@ -120,6 +145,10 @@ create table if not exists public.document_torque_profile_map (
   spec_sheet text not null references public.document_torque_status(spec_sheet) on delete cascade,
   profile_id uuid not null references public.torque_profiles(id) on delete cascade,
   mapping_type text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint document_torque_profile_map_type_check
+    check (mapping_type in ('uses_profile', 'references_profile', 'provisional_profile')),
   unique (spec_sheet, profile_id)
 );
 
@@ -348,3 +377,97 @@ from public.torque_profiles p
 join public.torque_profile_values v on v.profile_id = p.id
 where p.profile_code like 'm83513_%'
 order by p.profile_code, v.context, v.fastener_thread, v.arrangement_scope;
+
+create or replace view public.v_83513_torque_resolution as
+with profile_value_counts as (
+  select profile_id, count(*) as value_count
+  from public.torque_profile_values
+  group by profile_id
+),
+evidence_counts as (
+  select spec_sheet, count(*) as evidence_row_count
+  from public.torque_source_evidence
+  group by spec_sheet
+)
+select
+  d.spec_family,
+  d.spec_sheet,
+  d.slash_sheet,
+  d.revision,
+  d.torque_mode,
+  d.audit_status as document_audit_status,
+  d.referenced_spec_sheet,
+  d.extracted_row_count,
+  d.canonical_row_count,
+  m.mapping_type,
+  p.profile_code as resolved_profile_code,
+  p.profile_kind as resolved_profile_kind,
+  p.profile_status as resolved_profile_status,
+  p.source_of_truth_level as resolved_source_of_truth_level,
+  p.approval_status as resolved_approval_status,
+  p.governing_spec_sheet,
+  p.governing_revision,
+  p.source_spec_sheet as profile_source_spec_sheet,
+  p.source_revision as profile_source_revision,
+  coalesce(v.value_count, 0) as resolved_fact_count,
+  coalesce(e.evidence_row_count, 0) as evidence_row_count,
+  coalesce(v.value_count, 0) > 0 as has_numeric_values,
+  p.approval_status = 'approved' and p.source_of_truth_level = 'audited_pdf_table' as values_verified,
+  case
+    when p.id is null then false
+    when m.mapping_type = 'references_profile' then true
+    when p.profile_kind = 'shared_derived' then true
+    when d.spec_sheet <> p.source_spec_sheet then true
+    else false
+  end as values_inherited,
+  case
+    when p.id is null and d.torque_mode not in ('none', 'no_torque') then true
+    when d.audit_status in ('needs_review', 'stale') then true
+    when p.approval_status in ('needs_review', 'rejected') then true
+    when p.profile_status in ('unverified', 'provisional') then true
+    else false
+  end as needs_review,
+  d.last_extracted_at,
+  d.notes
+from public.document_torque_status d
+left join public.document_torque_profile_map m on m.spec_sheet = d.spec_sheet
+left join public.torque_profiles p on p.id = m.profile_id
+left join profile_value_counts v on v.profile_id = p.id
+left join evidence_counts e on e.spec_sheet = d.spec_sheet
+where d.spec_family = '83513' and d.is_active
+order by case when d.slash_sheet ~ '^[0-9]+$' then d.slash_sheet::int else -1 end;
+
+create or replace view public.v_83513_torque_effective_facts as
+select
+  r.spec_sheet,
+  r.slash_sheet,
+  r.revision,
+  r.torque_mode,
+  r.resolved_profile_code,
+  r.governing_spec_sheet,
+  r.governing_revision,
+  r.values_verified,
+  r.values_inherited,
+  r.needs_review,
+  v.context,
+  v.fastener_thread,
+  v.source_thread_label,
+  v.arrangement_scope,
+  v.torque_min_in_lbf,
+  v.torque_max_in_lbf,
+  r.resolved_approval_status as approval_status,
+  r.resolved_profile_kind as profile_kind,
+  r.resolved_source_of_truth_level as source_of_truth_level
+from public.v_83513_torque_resolution r
+join public.torque_profiles p
+  on p.profile_code = r.resolved_profile_code
+  and p.is_active
+join public.torque_profile_values v on v.profile_id = p.id
+where r.resolved_profile_code is not null
+order by
+  case when r.slash_sheet ~ '^[0-9]+$' then r.slash_sheet::int else -1 end,
+  v.context,
+  v.fastener_thread,
+  v.arrangement_scope,
+  v.torque_min_in_lbf,
+  v.torque_max_in_lbf;
